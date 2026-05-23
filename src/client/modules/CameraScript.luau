@@ -13,7 +13,6 @@ local CameraPC = require(script.Parent.modules.CameraPC)
 local CameraPhone = require(script.Parent.modules.CameraPhone)
 
 type CameraViewState = CameraPC.CameraViewState
-type CameraController = CameraPC.CameraPC | CameraPhone.CameraPhone
 
 local RENDER_STEP_NAME = "CubitCombatCustomCamera"
 local RENDER_STEP_PRIORITY = Enum.RenderPriority.Camera.Value
@@ -66,9 +65,8 @@ local function shouldUsePCModule(recentInputType: Enum.UserInputType?): boolean
 	return hasKeyboardMouseHardware()
 end
 
-local activeController: CameraController = if shouldUsePCModule(lastInputType)
-	then cameraPC
-	else cameraPhone
+-- [FIX] We use a boolean state instead of a union variable to track the active controller.
+local isPCActive: boolean = shouldUsePCModule(lastInputType)
 
 --[[
 	Returns the world position the camera should look at for the local character.
@@ -89,34 +87,46 @@ local currentCharacter: Model? = nil
 local currentFilterInstances: { Instance } = {}
 
 local function getFilterInstances(character: Model): { Instance }
-	-- Jeśli postać się nie zmieniła, użyj tej samej tabeli w pamięci
 	if character == currentCharacter then
 		return currentFilterInstances
 	end
 	
-	-- Zaktualizuj tylko, gdy postać jest nowa (np. po śmierci)
 	currentCharacter = character
 	currentFilterInstances = { character }
-	return currentFilterInstances
+	return currentFilterInstances --nostrict
 end
 
 --[[
 	Activates PC or Phone module and transfers the current camera view state.
 ]]
 local function setActiveController(usePCModule: boolean): ()
-	local incoming: CameraController = if usePCModule then cameraPC else cameraPhone
-	if incoming == activeController then
-		incoming:Enable()
+	-- [FIX] We use explicit branching to bypass union method call warnings.
+	if usePCModule == isPCActive then
+		if usePCModule then
+			cameraPC:Enable()
+		else
+			cameraPhone:Enable()
+		end
 		return
 	end
 
-	local outgoing = activeController
-	local viewState: CameraViewState = outgoing:GetViewState()
+	local viewState: CameraViewState
 
-	outgoing:Disable()
-	incoming:ApplyViewState(viewState)
-	incoming:Enable()
-	activeController = incoming
+	if isPCActive then
+		viewState = cameraPC:GetViewState()
+		cameraPC:Disable()
+		
+		cameraPhone:ApplyViewState(viewState)
+		cameraPhone:Enable()
+	else
+		viewState = cameraPhone:GetViewState()
+		cameraPhone:Disable()
+		
+		cameraPC:ApplyViewState(viewState)
+		cameraPC:Enable()
+	end
+
+	isPCActive = usePCModule
 end
 
 --[[
@@ -140,11 +150,19 @@ local function onRenderStep(deltaTime: number): ()
 		return
 	end
 
-	local output = activeController:Update({
+	local input = {
 		focusOrigin = focusOrigin,
 		deltaTime = deltaTime,
 		filterInstances = getFilterInstances(character),
-	})
+	}
+
+	-- [FIX] Explicit branching to safely update the correct module.
+	local output
+	if isPCActive then
+		output = cameraPC:Update(input) --nostrict
+	else
+		output = cameraPhone:Update(input) --nostrict
+	end
 
 	local camera = workspace.CurrentCamera
 	if not camera then
@@ -195,7 +213,8 @@ local function stopCamera(): ()
 	end
 end
 
-local function onCharacterAdded(_character: Instance): ()
+-- [FIX] Changed `_character: Instance` to `_character: Model` because `Player.CharacterAdded` explicitly yields a Model object.
+local function onCharacterAdded(_character: Model): ()
 	startCamera()
 end
 

@@ -79,11 +79,6 @@ local function lerpZoom(current: number, target: number, speed: number, deltaTim
 	return current + (target - current) * alpha
 end
 
--- In CameraCore
-function CameraCore.GetLimits(self: CameraCore): (number, number)
-    return self._minDistance, self._maxDistance
-end
-
 --[[
 	Builds a CameraCore instance with cached RaycastParams for spherecasts.
 ]]
