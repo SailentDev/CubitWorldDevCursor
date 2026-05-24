@@ -1,0 +1,178 @@
+--!strict
+--[[
+    ControlPhone Module (Fixed)
+    Features: Dynamic Joystick (Bottom-Left Zone) and Continuous Jump.
+    Fix: Resets JoystickThumb to center on every new touch.
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+-- TYPES
+export type ControlPhone = { 
+	Enable: (self: ControlPhone) -> (), 
+	Disable: (self: ControlPhone) -> () 
+}
+
+type JoystickData = { 
+	IsDragging: boolean, 
+	TouchId: InputObject?, 
+	MoveVector: Vector2 
+}
+
+-- MICRO-OPTIMIZATIONS
+local V3_NEW = Vector3.new
+local V2_NEW = Vector2.new
+local V3_ZERO = Vector3.zero
+local MATH_MIN = math.min
+
+-- PRIVATE STATE
+local _player = Players.LocalPlayer
+local _activeConnections: { RBXScriptConnection } = {}
+local _joystickState: JoystickData = { 
+	IsDragging = false, 
+	TouchId = nil, 
+	MoveVector = V2_NEW(0, 0) 
+}
+local _isJumping = false
+
+-- UI REFERENCES
+local _joystickBase: Frame? = nil
+local _joystickThumb: ImageButton? = nil
+local _jumpButton: ImageButton? = nil
+
+local ControlPhone = {} :: ControlPhone
+
+-- PRIVATE FUNCTIONS
+
+--[[ Checks if a touch position is in the bottom-left quadrant (50% width, 50% height) ]]
+local function isWithinTouchZone(pos: Vector3): boolean
+	local camera = Workspace.CurrentCamera
+	if not camera then return false end
+	local screenSize = camera.ViewportSize
+	return pos.X < (screenSize.X * 0.5) and pos.Y > (screenSize.Y * 0.5)
+end
+
+--[[ Main update loop for movement and jumping ]]
+local function onUpdate(): ()
+	local character = _player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	-- Continuous Jump Logic
+	if _isJumping then 
+		humanoid.Jump = true 
+	end
+
+	-- Camera-Relative Movement Logic
+	local camera = Workspace.CurrentCamera
+	if camera and _joystickState.MoveVector.Magnitude > 0 then
+		local camCF = camera.CFrame
+		local forward = V3_NEW(camCF.LookVector.X, 0, camCF.LookVector.Z).Unit
+		local right = V3_NEW(camCF.RightVector.X, 0, camCF.RightVector.Z).Unit
+		
+		-- Translate 2D joystick to 3D world space
+		local dir = (forward * -_joystickState.MoveVector.Y) + (right * _joystickState.MoveVector.X)
+		humanoid:Move(dir, false)
+	else
+		humanoid:Move(V3_ZERO, false)
+	end
+end
+
+--[[ Updates the visual position of the thumb and the MoveVector ]]
+local function updateJoystickPosition(input: InputObject): ()
+	if not _joystickBase or not _joystickThumb then return end
+	
+	local basePos = _joystickBase.AbsolutePosition + (_joystickBase.AbsoluteSize / 2)
+	local diff = V2_NEW(input.Position.X, input.Position.Y) - basePos
+	local radius = _joystickBase.AbsoluteSize.X / 2
+	local dist = MATH_MIN(diff.Magnitude, radius)
+	local dir = if diff.Magnitude > 0 then diff.Unit else V2_NEW(0, 0)
+
+	-- Update internal state for movement
+	_joystickState.MoveVector = dir * (dist / radius)
+	
+	-- Update UI position relative to base center
+	_joystickThumb.Position = UDim2.fromOffset(
+		(_joystickBase.AbsoluteSize.X / 2) + (dir.X * dist), 
+		(_joystickBase.AbsoluteSize.Y / 2) + (dir.Y * dist)
+	)
+end
+
+-- PUBLIC METHODS
+
+function ControlPhone:Enable(): ()
+	self:Disable() -- Ensure clean state
+	
+	local playerGui = _player:WaitForChild("PlayerGui")
+	local hud = playerGui:WaitForChild("GameHUD")
+	_joystickBase = hud:WaitForChild("JoystickBase") :: Frame
+	_joystickThumb = _joystickBase:WaitForChild("JoystickThumb") :: ImageButton
+	_jumpButton = hud:WaitForChild("JumpButton") :: ImageButton
+
+	-- DYNAMIC JOYSTICK START
+	table.insert(_activeConnections, UserInputService.InputBegan:Connect(function(input, processed)
+		if processed then return end
+		
+		local isTouch = input.UserInputType == Enum.UserInputType.Touch
+		local isMouse = input.UserInputType == Enum.UserInputType.MouseButton1
+		
+		if (isTouch or isMouse) and isWithinTouchZone(input.Position) then
+			_joystickState.IsDragging = true
+			_joystickState.TouchId = input
+			
+			if _joystickBase and _joystickThumb then
+				-- Move base to touch position
+				_joystickBase.Position = UDim2.fromOffset(input.Position.X, input.Position.Y)
+				
+				-- FIX: Explicitly reset thumb to center of the new base position
+				_joystickThumb.Position = UDim2.fromScale(0.5, 0.5)
+				_joystickState.MoveVector = V2_NEW(0, 0)
+				
+				_joystickBase.Visible = true
+			end
+		end
+	end))
+
+	table.insert(_activeConnections, UserInputService.InputChanged:Connect(function(input)
+		if _joystickState.IsDragging and input == _joystickState.TouchId then 
+			updateJoystickPosition(input) 
+		end
+	end))
+
+	table.insert(_activeConnections, UserInputService.InputEnded:Connect(function(input)
+		if input == _joystickState.TouchId then
+			_joystickState.IsDragging = false
+			_joystickState.TouchId = nil
+			_joystickState.MoveVector = V2_NEW(0, 0)
+			
+			if _joystickBase then 
+				_joystickBase.Visible = false 
+			end
+		end
+	end))
+
+	-- JUMP LOGIC
+	table.insert(_activeConnections, _jumpButton.InputBegan:Connect(function() _isJumping = true end))
+	table.insert(_activeConnections, _jumpButton.InputEnded:Connect(function() _isJumping = false end))
+
+	-- UPDATE LOOP
+	table.insert(_activeConnections, RunService.PreSimulation:Connect(onUpdate))
+end
+
+function ControlPhone:Disable(): ()
+	for _, c in _activeConnections do c:Disconnect() end
+	table.clear(_activeConnections)
+	
+	_isJumping = false
+	_joystickState.IsDragging = false
+	_joystickState.MoveVector = V2_NEW(0, 0)
+	
+	if _joystickBase then 
+		_joystickBase.Visible = false 
+	end
+end
+
+return ControlPhone
