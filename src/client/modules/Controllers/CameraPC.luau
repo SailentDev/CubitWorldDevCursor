@@ -19,6 +19,7 @@ export type CameraPCConfig = {
 	zoomStep: number?,
 	minPitch: number?,
 	maxPitch: number?,
+	orchestrator: any?, -- Reference to the orchestrator module (CameraScript)
 }
 
 export type CameraPCUpdateInput = {
@@ -28,8 +29,7 @@ export type CameraPCUpdateInput = {
 }
 
 export type CameraViewState = {
-	yaw: number,
-	pitch: number,
+	rotation: CFrame,
 	targetDistance: number,
 	smoothedDistance: number,
 }
@@ -47,7 +47,7 @@ export type CameraPC = {
 	SetRotation: (self: CameraPC, yaw: number, pitch: number) -> (),
 	SetTargetDistance: (self: CameraPC, distance: number) -> (),
 -- Internal Properties
-	_core: CameraCore.CameraCore, -- No more 'any'! This now strictly expects a CameraCore object.
+	_core: CameraCore.CameraCore,
 	_yawSensitivity: number,
 	_pitchSensitivity: number,
 	_zoomStep: number,
@@ -60,6 +60,7 @@ export type CameraPC = {
 	_enabled: boolean,
 	_savedMouseBehavior: Enum.MouseBehavior,
 	_connections: { RBXScriptConnection },
+	_orchestrator: any,
 
 	-- Private Methods
 	_disconnectAll: (self: CameraPC) -> (),
@@ -84,21 +85,17 @@ local CameraPC = {}
 CameraPC.__index = CameraPC
 
 --[[
-	Builds the look CFrame passed into CameraCore from yaw/pitch radians.
+	Builds the look CFrame passed into CameraCore.
 ]]
 local function buildRotation(yaw: number, pitch: number): CFrame
-	return CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0)
+	return CFrame.fromEulerAnglesYXZ(pitch, yaw, 0)
 end
 
 --[[
 	Creates a PC camera controller backed by CameraCore.
 ]]
 function CameraPC.new(config: CameraPCConfig?): CameraPC
-	-- [FIX] Typed the resolvedConfig table
 	local resolvedConfig: CameraPCConfig = config or {}
-
-	-- Note on `:: any`: In Luau, using `any` right here during `setmetatable` is standard boilerplate.
-	-- It bypasses the metatable construction phase, but the function still strictly returns a `CameraPC`.
 	local self = setmetatable({}, CameraPC) :: any
 
 	self._core = CameraCore.new(resolvedConfig.coreConfig)
@@ -115,78 +112,52 @@ function CameraPC.new(config: CameraPCConfig?): CameraPC
 	self._enabled = false
 	self._savedMouseBehavior = Enum.MouseBehavior.Default
 	self._connections = table.create(3) :: { RBXScriptConnection }
+	self._orchestrator = resolvedConfig.orchestrator
 
 	return (self :: any) :: CameraPC
 end
 
---[[
-	Returns the current look rotation passed to CameraCore.
-]]
 function CameraPC.GetRotation(self: CameraPC): CFrame
 	return buildRotation(self._yaw, self._pitch)
 end
 
---[[
-	Returns internal yaw and pitch radians.
-]]
 function CameraPC.GetYawPitch(self: CameraPC): (number, number)
 	return self._yaw, self._pitch
 end
 
---[[
-	Returns the unsmoothed zoom target (CameraCore smooths toward this).
-]]
 function CameraPC.GetTargetDistance(self: CameraPC): number
 	return self._targetDistance
 end
 
---[[
-	Returns the smoothed zoom distance held inside CameraCore.
-]]
 function CameraPC.GetSmoothedDistance(self: CameraPC): number
 	return self._core:GetSmoothedDistance()
 end
 
---[[
-	Captures rotation and zoom for handoff when switching device modules.
-]]
 function CameraPC.GetViewState(self: CameraPC): CameraViewState
 	return {
-		yaw = self._yaw,
-		pitch = self._pitch,
+		rotation = buildRotation(self._yaw, self._pitch),
 		targetDistance = self._targetDistance,
 		smoothedDistance = self._core:GetSmoothedDistance(),
 	}
 end
 
---[[
-	Applies a captured view state so rotation and zoom do not snap after a switch.
-]]
 function CameraPC.ApplyViewState(self: CameraPC, state: CameraViewState): ()
-	self:SetRotation(state.yaw, state.pitch)
+	local pitch, yaw, _ = state.rotation:ToEulerAnglesYXZ()
+	self:SetRotation(yaw, pitch)
 	self._targetDistance = state.targetDistance
 	self._core:ResetZoom(state.smoothedDistance)
 end
 
---[[
-	Sets yaw/pitch instantly.
-]]
 function CameraPC.SetRotation(self: CameraPC, yaw: number, pitch: number): ()
 	self._yaw = yaw
 	self._pitch = math_clamp(pitch, self._minPitch, self._maxPitch)
 end
 
---[[
-	Sets zoom target; clamping is handled by CameraCore.
-]]
 function CameraPC.SetTargetDistance(self: CameraPC, distance: number): ()
 	local min, max = self._core:GetLimits()
 	self._targetDistance = math_clamp(distance, min, max)
 end
 
---[[
-	Disconnects all UserInputService listeners.
-]]
 function CameraPC._disconnectAll(self: CameraPC): ()
 	for index = #self._connections, 1, -1 do
 		if self._connections[index] then
@@ -196,9 +167,6 @@ function CameraPC._disconnectAll(self: CameraPC): ()
 	end
 end
 
---[[
-	Locks the mouse so GetMouseDelta reports drag movement during RMB rotation.
-]]
 function CameraPC._beginRotation(self: CameraPC): ()
 	if self._isRotating then
 		return
@@ -209,9 +177,6 @@ function CameraPC._beginRotation(self: CameraPC): ()
 	UserInputService.MouseBehavior = MOUSE_LOCK_BEHAVIOR
 end
 
---[[
-	Restores mouse state after RMB rotation ends.
-]]
 function CameraPC._endRotation(self: CameraPC): ()
 	if not self._isRotating then
 		return
@@ -221,53 +186,53 @@ function CameraPC._endRotation(self: CameraPC): ()
 	UserInputService.MouseBehavior = self._savedMouseBehavior
 end
 
---[[
-	Handles scroll wheel zoom. Zoom is adjusted here; rotation stays in Update.
-]]
 function CameraPC._onInputChanged(self: CameraPC, input: InputObject, gameProcessed: boolean): ()
 	if not self._enabled or gameProcessed then
 		return
 	end
 
 	if input.UserInputType == MOUSE_WHEEL then
-		-- Get the limits from the core
+		-- Block zoom adjustments when shift lock is active
+		if self._core._shiftLockActive then
+			return
+		end
+
 		local min, max = self._core:GetLimits()
-		
-		-- Calculate new distance and clamp it immediately
 		local delta = input.Position.Z * self._zoomStep
 		self._targetDistance = math_clamp(self._targetDistance - delta, min, max)
 	end
 end
 
---[[
-	Starts RMB camera drag. Ignores gameProcessed so Studio UI does not block rotation.
-]]
-function CameraPC._onInputBegan(self: CameraPC, input: InputObject, _gameProcessed: boolean): ()
+function CameraPC._onInputBegan(self: CameraPC, input: InputObject, gameProcessed: boolean): ()
 	if not self._enabled then
 		return
 	end
 
 	if input.UserInputType == MOUSE_BUTTON_RIGHT then
-		self:_beginRotation()
+		-- Prevent right-click conflicts when shift lock is actively managing the mouse state
+		if not self._core._shiftLockActive then
+			self:_beginRotation()
+		end
+	elseif input.KeyCode == Enum.KeyCode.LeftShift and not gameProcessed then
+		local orchestrator = self._orchestrator or require(script.Parent :: any)
+		if orchestrator and typeof(orchestrator.ToggleShiftLock) == "function" then
+			orchestrator:ToggleShiftLock()
+		end
 	end
 end
 
---[[
-	Ends RMB camera drag.
-]]
 function CameraPC._onInputEnded(self: CameraPC, input: InputObject, _gameProcessed: boolean): ()
 	if not self._enabled then
 		return
 	end
 
 	if input.UserInputType == MOUSE_BUTTON_RIGHT then
-		self:_endRotation()
+		if not self._core._shiftLockActive then
+			self:_endRotation()
+		end
 	end
 end
 
---[[
-	Registers raw mouse input listeners. Call before BindToRenderStep drives Update.
-]]
 function CameraPC.Enable(self: CameraPC): ()
 	if self._enabled then
 		return
@@ -287,9 +252,6 @@ function CameraPC.Enable(self: CameraPC): ()
 	end)
 end
 
---[[
-	Unregisters input listeners and resets rotation state.
-]]
 function CameraPC.Disable(self: CameraPC): ()
 	if not self._enabled then
 		return
@@ -300,16 +262,20 @@ function CameraPC.Disable(self: CameraPC): ()
 	self:_disconnectAll()
 end
 
---[[
-	Render-step entry: applies mouse delta while RMB is held, then delegates to CameraCore.
-]]
 function CameraPC.Update(self: CameraPC, input: CameraPCUpdateInput): CameraCore.CameraUpdateOutput
-	if UserInputService:IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) then
-		if not self._isRotating then
-			self:_beginRotation()
+	local isShiftLocked = self._core._shiftLockActive
+
+	if isShiftLocked then
+		-- Terminate any ongoing manual RMB dragging state if shift lock was activated mid-drag
+		if self._isRotating then
+			self:_endRotation()
 		end
 
-		-- GetMouseDelta only returns non-zero values while the mouse is locked.
+		-- Ensure Shift Lock settings remain active and override other script requests.
+		-- LockCurrentPosition keeps the cursor exactly where it was on screen when Shift Lock started.
+		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+		UserInputService.MouseIconEnabled = false
+
 		local mouseDelta = UserInputService:GetMouseDelta()
 		if mouseDelta.Magnitude > 0 then
 			self._yaw -= mouseDelta.X * self._yawSensitivity
@@ -319,8 +285,29 @@ function CameraPC.Update(self: CameraPC, input: CameraPCUpdateInput): CameraCore
 				self._maxPitch
 			)
 		end
-	elseif self._isRotating then
-		self:_endRotation()
+	else
+		-- Ensure default mouse visibility is restored when shift lock is turned off
+		if not UserInputService.MouseIconEnabled and not self._isRotating then
+			UserInputService.MouseIconEnabled = true
+		end
+
+		if UserInputService:IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) then
+			if not self._isRotating then
+				self:_beginRotation()
+			end
+
+			local mouseDelta = UserInputService:GetMouseDelta()
+			if mouseDelta.Magnitude > 0 then
+				self._yaw -= mouseDelta.X * self._yawSensitivity
+				self._pitch = math_clamp(
+					self._pitch - mouseDelta.Y * self._pitchSensitivity,
+					self._minPitch,
+					self._maxPitch
+				)
+			end
+		elseif self._isRotating then
+			self:_endRotation()
+		end
 	end
 
 	return self._core:Update({

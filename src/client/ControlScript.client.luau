@@ -28,9 +28,11 @@ local jumpButton = gameHUD:WaitForChild("JumpButton") :: ImageButton
 
 -- REFERENCES
 local modulesFolder = script.Parent:WaitForChild("modules") :: Folder
+local ControllersFolder = modulesFolder:WaitForChild("Controllers") :: Folder
+
 local InputManager = require(modulesFolder:WaitForChild("InputManager")) :: InputManagerModule
-local ControlPC = require(modulesFolder:WaitForChild("ControlPC")) :: ControlModule
-local ControlPhone = require(modulesFolder:WaitForChild("ControlPhone")) :: ControlModule
+local ControlPC = require(ControllersFolder:WaitForChild("ControlPC")) :: ControlModule
+local ControlPhone = require(ControllersFolder:WaitForChild("ControlPhone")) :: ControlModule
 
 local function switchController(newDevice: DeviceType): ()
 	if _currentDevice == newDevice then return end

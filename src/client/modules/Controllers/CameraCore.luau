@@ -6,7 +6,12 @@
 	and instantaneous positional/orientational updates for responsive feel.
 ]]
 
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
 
 export type CameraCoreConfig = {
 	sphereRadius: number?,
@@ -23,7 +28,7 @@ export type CameraUpdateInput = {
 	rotation: CFrame,
 	targetDistance: number,
 	deltaTime: number,
-	filterInstances: { Instance }?,
+	filterInstances: { Instance }?, -- Retained in type for compatibility; ignored internally
 }
 
 export type CameraUpdateOutput = {
@@ -32,7 +37,6 @@ export type CameraUpdateOutput = {
 	distance: number,
 }
 
--- [UPDATED] Added all internal properties and the _resolveCollision method to the type definition.
 export type CameraCore = {
 	-- Internal State
 	_sphereRadius: number,
@@ -43,7 +47,8 @@ export type CameraCore = {
 	_raycastOriginEpsilon: number,
 	_smoothedDistance: number,
 	_raycastParams: RaycastParams,
-	_filterInstances: { Instance },
+	_shiftLockActive: boolean,
+	_preSimulationConnection: RBXScriptConnection?,
 	
 	-- Methods
 	Update: (self: CameraCore, input: CameraUpdateInput) -> CameraUpdateOutput,
@@ -52,9 +57,10 @@ export type CameraCore = {
 	ResetZoom: (self: CameraCore, distance: number?) -> (),
 	_resolveCollision: (self: CameraCore, focus: Vector3, lookVector: Vector3, distance: number) -> Vector3,
 	GetLimits: (self: CameraCore) -> (number, number),
+	ApplyShiftLock: (self: CameraCore, isActive: boolean) -> (),
 }
 
-local DEFAULT_SPHERE_RADIUS = 0.35
+local DEFAULT_SPHERE_RADIUS = 0.25
 local DEFAULT_MIN_DISTANCE = 2
 local DEFAULT_MAX_DISTANCE = 24
 local DEFAULT_DISTANCE = 12
@@ -62,28 +68,29 @@ local DEFAULT_ZOOM_LERP_SPEED = 12
 local DEFAULT_COLLISION_PADDING = 0.15
 local DEFAULT_ORIGIN_EPSILON = 0.1
 
+local SHIFT_LOCK_OFFSET = Vector3.new(0, 0, 0)
 local EPSILON = 1e-4
 
 local CameraCore = {}
 CameraCore.__index = CameraCore
 
 --[[
-	Exponential smoothing for zoom only; framerate-independent via deltaTime.
+	Exponential smoothing for zoom; framerate-independent via deltaTime.
 ]]
 local function lerpZoom(current: number, target: number, speed: number, deltaTime: number): number
 	if deltaTime <= 0 then
 		return target
 	end
 
-	local alpha = 1 - math.exp(-speed * deltaTime)
+	local clampedDT = math.min(deltaTime, 0.1)
+	local alpha = 1 - math.exp(-speed * clampedDT)
 	return current + (target - current) * alpha
 end
 
 --[[
-	Builds a CameraCore instance with cached RaycastParams for spherecasts.
+	Builds a CameraCore instance with RaycastParams configured for the "Camera" collision group.
 ]]
 function CameraCore.new(config: CameraCoreConfig?): CameraCore
-	-- [UPDATED] Explicitly define the type here so Luau knows what properties exist
 	local resolvedConfig: CameraCoreConfig = config or {}
 
 	local self = setmetatable({}, CameraCore) :: any
@@ -98,26 +105,24 @@ function CameraCore.new(config: CameraCoreConfig?): CameraCore
 	local defaultDistance = resolvedConfig.defaultDistance or DEFAULT_DISTANCE
 	self._smoothedDistance = math.clamp(defaultDistance, self._minDistance, self._maxDistance)
 
+	-- Configure RaycastParams to respect the Collision Group matrix
 	self._raycastParams = RaycastParams.new()
-	self._raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	self._raycastParams.CollisionGroup = "Camera" -- Automatically ignores "Players" and "Assets2" groups
 	self._raycastParams.IgnoreWater = true
 	self._raycastParams.RespectCanCollide = true
-	self._filterInstances = {} :: { Instance }
+	
+	self._shiftLockActive = false
+	self._preSimulationConnection = nil
 
 	return (self :: any) :: CameraCore
 end
 
 --[[
-	Replaces the exclude list used by spherecast collision queries.
+	No-op implementation to maintain structural interface compatibility.
+	Filtering is handled natively by the "Camera" CollisionGroup.
 ]]
 function CameraCore.SetFilterInstances(self: CameraCore, instances: { Instance }): ()
-	-- BLOKADA: Jeśli to dokładnie ta sama lista, przerwij!
-	if self._filterInstances == instances then
-		return
-	end
-	
-	self._filterInstances = instances
-	self._raycastParams.FilterDescendantsInstances = instances
+	-- Intentional no-op: prevents unnecessary allocation and preserves performance.
 end
 
 --[[
@@ -165,10 +170,8 @@ function CameraCore._resolveCollision(
 		return focus + castDirection
 	end
 
--- We allow the camera to get closer than minDistance if a wall is blocking it.
--- We only clamp to 0 to ensure it doesn't go "inside" the focus point.
-local safeDistance = math.max(result.Distance - self._collisionPadding, 0)
-return castOrigin + backward.Unit * safeDistance
+	local safeDistance = math.max(result.Distance - self._collisionPadding, 0)
+	return castOrigin + backward.Unit * safeDistance
 end
 
 --[[
@@ -176,10 +179,6 @@ end
 	Only target distance is smoothed; position and orientation follow inputs directly each frame.
 ]]
 function CameraCore.Update(self: CameraCore, input: CameraUpdateInput): CameraUpdateOutput
-	if input.filterInstances then
-		self:SetFilterInstances(input.filterInstances)
-	end
-
 	local clampedTarget = math.clamp(input.targetDistance, self._minDistance, self._maxDistance)
 	self._smoothedDistance = lerpZoom(
 		self._smoothedDistance,
@@ -189,11 +188,18 @@ function CameraCore.Update(self: CameraCore, input: CameraUpdateInput): CameraUp
 	)
 
 	local focus = input.focusOrigin
+
+	-- Apply Shift Lock positional offset
+	if self._shiftLockActive then
+		local offsetWorld = input.rotation:VectorToWorldSpace(SHIFT_LOCK_OFFSET)
+		focus = focus + offsetWorld
+	end
+
 	local lookVector = input.rotation.LookVector
 	local cameraPosition = self:_resolveCollision(focus, lookVector, self._smoothedDistance)
 
-	-- Instantaneous aim at focus; no positional/orientational smoothing.
-	local cframe = CFrame.lookAt(cameraPosition, focus)
+	-- Offset translation directly onto pre-existing rotation matrix.
+	local cframe = input.rotation + cameraPosition
 
 	return {
 		cframe = cframe,
@@ -205,8 +211,58 @@ end
 --[[
 	Returns the min and max distance limits.
 ]]
-function CameraCore.GetLimits(self: CameraCore): (number, number)
+function CameraCore.GetLimits(self: CameraCore) : (number, number)
 	return self._minDistance, self._maxDistance
+end
+
+--[[
+	Modifies the camera core's shift lock status. Handles state changes for UserInputService
+	and Humanoid behavior changes.
+]]
+function CameraCore.ApplyShiftLock(self: CameraCore, isActive: boolean): ()
+	self._shiftLockActive = isActive
+	
+	-- Clean up prior physics loop connections
+	if self._preSimulationConnection then
+		self._preSimulationConnection:Disconnect()
+		self._preSimulationConnection = nil
+	end
+
+	-- Configure mouse lock behavior and visibility
+	if isActive then
+		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+		UserInputService.MouseIconEnabled = false
+
+		-- Align the character CFrame before the physics solver runs (PreSimulation).
+		self._preSimulationConnection = RunService.PreSimulation:Connect(function()
+			if not LocalPlayer then return end
+			local character = LocalPlayer.Character
+			if not character then return end
+			local rootPart = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+			local camera = Workspace.CurrentCamera
+			if rootPart and camera then
+				local lookVector = camera.CFrame.LookVector
+				local horizontalLook = Vector3.new(lookVector.X, 0, lookVector.Z)
+				if horizontalLook.Magnitude > EPSILON then
+					rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + horizontalLook.Unit)
+				end
+			end
+		end)
+	else
+		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		UserInputService.MouseIconEnabled = true
+	end
+
+	-- Configure Humanoid AutoRotate state
+	if LocalPlayer then
+		local character = LocalPlayer.Character
+		if character then
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				humanoid.AutoRotate = not isActive
+			end
+		end
+	end
 end
 
 return CameraCore

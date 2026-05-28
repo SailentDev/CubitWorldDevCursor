@@ -11,6 +11,9 @@
       "Shared": {
         "$path": "src/shared"
       }
+    },
+    "ServerScriptService": {
+      "$path": "src/server"
     }
   }
 }

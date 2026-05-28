@@ -25,8 +25,7 @@ export type CameraPhoneUpdateInput = {
 }
 
 export type CameraViewState = {
-	yaw: number,
-	pitch: number,
+	rotation: CFrame,
 	targetDistance: number,
 	smoothedDistance: number,
 }
@@ -81,8 +80,11 @@ local DEFAULT_MAX_PITCH = math.rad(70)
 local CameraPhone = {}
 CameraPhone.__index = CameraPhone
 
+--[[
+	Builds the look CFrame passed into CameraCore.
+]]
 local function buildRotation(yaw: number, pitch: number): CFrame
-	return CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0)
+	return CFrame.fromEulerAnglesYXZ(pitch, yaw, 0)
 end
 
 local function getScreenPosition(input: InputObject): Vector2
@@ -102,8 +104,7 @@ end
 	Creates a touch camera controller backed by CameraCore.
 ]]
 function CameraPhone.new(config: CameraPhoneConfig?): CameraPhone
-local resolvedConfig: CameraPhoneConfig = config or {}
-
+	local resolvedConfig: CameraPhoneConfig = config or {}
 	local self = setmetatable({}, CameraPhone) :: any
 
 	self._core = CameraCore.new(resolvedConfig.coreConfig)
@@ -126,73 +127,46 @@ local resolvedConfig: CameraPhoneConfig = config or {}
 	return (self :: any) :: CameraPhone
 end
 
---[[
-	Returns the current look rotation passed to CameraCore.
-]]
 function CameraPhone.GetRotation(self: CameraPhone): CFrame
 	return buildRotation(self._yaw, self._pitch)
 end
 
---[[
-	Returns the unsmoothed zoom target (CameraCore smooths toward this).
-]]
 function CameraPhone.GetTargetDistance(self: CameraPhone): number
 	return self._targetDistance
 end
 
---[[
-	Returns internal yaw and pitch radians without Euler decomposition.
-]]
 function CameraPhone.GetYawPitch(self: CameraPhone): (number, number)
 	return self._yaw, self._pitch
 end
 
---[[
-	Returns the smoothed zoom distance held inside CameraCore.
-]]
 function CameraPhone.GetSmoothedDistance(self: CameraPhone): number
 	return self._core:GetSmoothedDistance()
 end
 
---[[
-	Captures rotation and zoom for handoff when switching device modules.
-]]
 function CameraPhone.GetViewState(self: CameraPhone): CameraViewState
 	return {
-		yaw = self._yaw,
-		pitch = self._pitch,
+		rotation = buildRotation(self._yaw, self._pitch),
 		targetDistance = self._targetDistance,
 		smoothedDistance = self._core:GetSmoothedDistance(),
 	}
 end
 
---[[
-	Applies a captured view state so rotation and zoom do not snap after a switch.
-]]
 function CameraPhone.ApplyViewState(self: CameraPhone, state: CameraViewState): ()
-	self:SetRotation(state.yaw, state.pitch)
+	local pitch, yaw, _ = state.rotation:ToEulerAnglesYXZ()
+	self:SetRotation(yaw, pitch)
 	self._targetDistance = state.targetDistance
 	self._core:ResetZoom(state.smoothedDistance)
 end
 
---[[
-	Sets yaw/pitch instantly (e.g. when snapping behind the character).
-]]
 function CameraPhone.SetRotation(self: CameraPhone, yaw: number, pitch: number): ()
 	self._yaw = yaw
 	self._pitch = math.clamp(pitch, self._minPitch, self._maxPitch)
 end
 
---[[
-	Sets zoom target; clamping is handled by CameraCore.
-]]
 function CameraPhone.SetTargetDistance(self: CameraPhone, distance: number): ()
 	self._targetDistance = distance
 end
 
---[[
-	Disconnects all input listeners registered by Enable.
-]]
 function CameraPhone._disconnectAll(self: CameraPhone): ()
 	for index = #self._connections, 1, -1 do
 		local connection = self._connections[index]
@@ -201,9 +175,6 @@ function CameraPhone._disconnectAll(self: CameraPhone): ()
 	end
 end
 
---[[
-	Counts entries in the active touch map without allocating an array.
-]]
 function CameraPhone._getActiveTouchCount(self: CameraPhone): number
 	local count = 0
 	for _ in self._activeTouches do
@@ -212,9 +183,6 @@ function CameraPhone._getActiveTouchCount(self: CameraPhone): number
 	return count
 end
 
---[[
-	Returns the two active touch positions when exactly two touches are held.
-]]
 function CameraPhone._getPinchPositions(self: CameraPhone): (Vector2?, Vector2?)
 	local first: Vector2? = nil
 	local second: Vector2? = nil
@@ -231,9 +199,6 @@ function CameraPhone._getPinchPositions(self: CameraPhone): (Vector2?, Vector2?)
 	return first, second
 end
 
---[[
-	Applies two-finger pinch from the current screen positions of both active touches.
-]]
 function CameraPhone._applyPinchZoom(self: CameraPhone): ()
 	local posA, posB = self:_getPinchPositions()
 	if not posA or not posB then
@@ -248,9 +213,6 @@ function CameraPhone._applyPinchZoom(self: CameraPhone): ()
 	self._lastPinchDistance = pinchDistance
 end
 
---[[
-	Applies single-finger drag rotation from a touch delta vector.
-]]
 function CameraPhone._applyDragRotation(self: CameraPhone, screenDelta: Vector2): ()
 	if screenDelta.Magnitude <= 0 then
 		return
@@ -264,9 +226,6 @@ function CameraPhone._applyDragRotation(self: CameraPhone, screenDelta: Vector2)
 	)
 end
 
---[[
-	Stores a touch and seeds pinch baseline when the second finger lands.
-]]
 function CameraPhone._onInputBegan(self: CameraPhone, input: InputObject, gameProcessed: boolean): ()
 	if not self._enabled then
 		return
@@ -276,13 +235,11 @@ function CameraPhone._onInputBegan(self: CameraPhone, input: InputObject, gamePr
 		return
 	end
 
-	-- If it's a UI tap or inside the movement zone, completely flag it as ignored for camera operations
 	if gameProcessed or isMovementZone(input) then
 		self._ignoredTouches[input] = true
 		return
 	end
 
-	-- Only track touches explicitly meant for the camera panned actions
 	self._activeTouches[input] = getScreenPosition(input)
 
 	if self:_getActiveTouchCount() == 2 then
@@ -293,9 +250,6 @@ function CameraPhone._onInputBegan(self: CameraPhone, input: InputObject, gamePr
 	end
 end
 
---[[
-	Updates stored touch positions and applies gesture deltas.
-]]
 function CameraPhone._onInputChanged(self: CameraPhone, input: InputObject, gameProcessed: boolean): ()
 	if not self._enabled then
 		return
@@ -305,12 +259,10 @@ function CameraPhone._onInputChanged(self: CameraPhone, input: InputObject, game
 		return
 	end
 
-	-- Early exit if this finger belongs to the thumbstick/UI tracking
 	if self._ignoredTouches[input] then
 		return
 	end
 
-	-- Security check if a touch crosses into an active element or wasn't seeded in Began
 	if gameProcessed or not self._activeTouches[input] then
 		return
 	end
@@ -319,7 +271,10 @@ function CameraPhone._onInputChanged(self: CameraPhone, input: InputObject, game
 
 	-- If two valid camera fingers are down, process zoom
 	if self:_getActiveTouchCount() >= 2 then
-		self:_applyPinchZoom()
+		-- Block zoom changes when Shift Lock is enabled
+		if not self._core._shiftLockActive then
+			self:_applyPinchZoom()
+		end
 		return
 	end
 
@@ -328,9 +283,6 @@ function CameraPhone._onInputChanged(self: CameraPhone, input: InputObject, game
 	self:_applyDragRotation(Vector2.new(touchDelta.X, touchDelta.Y))
 end
 
---[[
-	Removes ended touches and clears pinch state when fewer than two remain.
-]]
 function CameraPhone._onInputEnded(self: CameraPhone, input: InputObject, _gameProcessed: boolean): ()
 	if input.UserInputType ~= Enum.UserInputType.Touch then
 		return
@@ -347,9 +299,6 @@ function CameraPhone._onInputEnded(self: CameraPhone, input: InputObject, _gameP
 	end
 end
 
---[[
-	Registers raw touch input. Call once before BindToRenderStep drives Update.
-]]
 function CameraPhone.Enable(self: CameraPhone): ()
 	if self._enabled then
 		return
@@ -373,9 +322,6 @@ function CameraPhone.Enable(self: CameraPhone): ()
 	table.insert(connections, UserInputService.InputEnded:Connect(onInputEnded))
 end
 
---[[
-	Unregisters touch listeners and clears gesture state.
-]]
 function CameraPhone.Disable(self: CameraPhone): ()
 	if not self._enabled then
 		return
@@ -388,9 +334,6 @@ function CameraPhone.Disable(self: CameraPhone): ()
 	self:_disconnectAll()
 end
 
---[[
-	Lightweight render-step entry: delegates current rotation/zoom to CameraCore.
-]]
 function CameraPhone.Update(self: CameraPhone, input: CameraPhoneUpdateInput): CameraCore.CameraUpdateOutput
 	return self._core:Update({
 		focusOrigin = input.focusOrigin,

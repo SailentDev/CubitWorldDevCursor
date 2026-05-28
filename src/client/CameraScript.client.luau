@@ -12,9 +12,12 @@ local Workspace = game:GetService("Workspace")
 
 -- Modules
 local Modules = script.Parent.modules
-local CameraPC = require(Modules.CameraPC)
-local CameraPhone = require(Modules.CameraPhone)
+local Controllers = Modules.Controllers
+
+local CameraPC = require(Controllers.CameraPC)
+local CameraPhone = require(Controllers.CameraPhone)
 local InputManager = require(Modules.InputManager)
+local CameraCore = require(Controllers.CameraCore)
 
 -- Types
 type CameraViewState = any -- Defined in CameraPC/Phone modules
@@ -28,15 +31,50 @@ local FOCUS_HEIGHT_OFFSET = 2
 local vector3_new = Vector3.new
 local cframe_new = CFrame.new
 
+-- Orchestrator Interface for Controllers
+local CameraScript = {}
+
 -- State
 local _player = Players.LocalPlayer
-local _cameraPC = CameraPC.new()
+local _isShiftLocked = false
+local _cameraPC = CameraPC.new({ orchestrator = CameraScript })
 local _cameraPhone = CameraPhone.new()
 local _isCameraRunning = false
 local _isPCActive = true
 
 local _currentCharacter: Model? = nil
 local _currentFilterInstances: { Instance } = {}
+
+local _playerGui = _player:WaitForChild("PlayerGui")
+local _buttonConnection: RBXScriptConnection? = nil
+
+--[[
+    Attempts to safely locate the ShiftlockButton in the PlayerGui with timeouts to avoid yielding.
+]]
+local function getShiftlockButton(): GuiButton?
+	local mainHUD = _playerGui:FindFirstChild("MainHUD") or _playerGui:WaitForChild("MainHUD", 5)
+	if not mainHUD then return nil end
+	
+	local buttons = mainHUD:FindFirstChild("Buttons") or mainHUD:WaitForChild("Buttons", 5)
+	if not buttons then return nil end
+	
+	return (buttons:FindFirstChild("ShiftlockButton") or buttons:WaitForChild("ShiftlockButton", 5)) :: GuiButton?
+end
+
+--[[
+    Toggles the internal Shift Lock state and updates the underlying CameraCore instances.
+]]
+function CameraScript:ToggleShiftLock(): ()
+	_isShiftLocked = not _isShiftLocked
+	
+	-- Update the active core logic instances
+	if _cameraPC and _cameraPC._core then
+		_cameraPC._core:ApplyShiftLock(_isShiftLocked)
+	end
+	if _cameraPhone and (_cameraPhone :: any)._core then
+		(_cameraPhone :: any)._core:ApplyShiftLock(_isShiftLocked)
+	end
+end
 
 --[[
     Returns the world position the camera should look at.
@@ -60,10 +98,17 @@ local function getFilterInstances(character: Model): { Instance }
 end
 
 --[[
-    Activates the correct module and transfers ViewState.
+    Activates the correct module, transfers ViewState, and handles ShiftlockButton visibility.
 ]]
 local function setActiveController(device: "PC" | "Phone"): ()
 	local usePC = (device == "PC")
+	_isPCActive = usePC
+
+	-- Control UI visibility based on the active controller
+	local button = getShiftlockButton()
+	if button then
+		button.Visible = not usePC
+	end
 	
 	if usePC == _isPCActive then
 		if usePC then _cameraPC:Enable() else _cameraPhone:Enable() end
@@ -82,8 +127,25 @@ local function setActiveController(device: "PC" | "Phone"): ()
 		_cameraPC:ApplyViewState(viewState)
 		_cameraPC:Enable()
 	end
+end
 
-	_isPCActive = usePC
+--[[
+    Sets up the ShiftlockButton click event and updates its visibility.
+]]
+local function setupShiftlockButton(): ()
+	if _buttonConnection then
+		_buttonConnection:Disconnect()
+		_buttonConnection = nil
+	end
+
+	local button = getShiftlockButton()
+	if button then
+		button.Visible = not _isPCActive
+		
+		_buttonConnection = button.Activated:Connect(function()
+			CameraScript:ToggleShiftLock()
+		end)
+	end
 end
 
 --[[
@@ -125,12 +187,23 @@ local function startCamera(): ()
 	if camera then camera.CameraType = Enum.CameraType.Scriptable end
 
 	setActiveController(InputManager:GetDeviceType())
+	setupShiftlockButton()
 	RunService:BindToRenderStep(RENDER_STEP_NAME, RENDER_STEP_PRIORITY, onRenderStep)
 end
 
 local function stopCamera(): ()
 	if not _isCameraRunning then return end
 	_isCameraRunning = false
+
+	-- Clean up active Shift Lock connections to prevent memory/physics loops on character reset
+	if _isShiftLocked then
+		CameraScript:ToggleShiftLock()
+	end
+
+	if _buttonConnection then
+		_buttonConnection:Disconnect()
+		_buttonConnection = nil
+	end
 
 	RunService:UnbindFromRenderStep(RENDER_STEP_NAME)
 	_cameraPC:Disable()
