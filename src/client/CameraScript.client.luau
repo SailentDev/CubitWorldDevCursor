@@ -16,7 +16,7 @@ local Controllers = Modules.Controllers
 
 local CameraPC = require(Controllers.CameraPC)
 local CameraPhone = require(Controllers.CameraPhone)
-local InputManager = require(Modules.InputManager)
+local InputManager = require(Controllers.InputManager)
 local CameraCore = require(Controllers.CameraCore)
 
 -- Types

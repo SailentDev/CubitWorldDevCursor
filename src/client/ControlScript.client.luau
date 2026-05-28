@@ -30,7 +30,7 @@ local jumpButton = gameHUD:WaitForChild("JumpButton") :: ImageButton
 local modulesFolder = script.Parent:WaitForChild("modules") :: Folder
 local ControllersFolder = modulesFolder:WaitForChild("Controllers") :: Folder
 
-local InputManager = require(modulesFolder:WaitForChild("InputManager")) :: InputManagerModule
+local InputManager = require(ControllersFolder:WaitForChild("InputManager")) :: InputManagerModule
 local ControlPC = require(ControllersFolder:WaitForChild("ControlPC")) :: ControlModule
 local ControlPhone = require(ControllersFolder:WaitForChild("ControlPhone")) :: ControlModule
 
