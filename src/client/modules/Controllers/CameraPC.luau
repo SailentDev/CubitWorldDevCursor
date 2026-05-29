@@ -5,7 +5,6 @@
 	Raw input is captured via UserInputService; pose is resolved in Update for RenderStep use.
 ]]
 
-local GuiService = game:GetService("GuiService")
 local UserInputService = game:GetService("UserInputService")
 
 local CameraCore = require(script.Parent.CameraCore)
@@ -167,7 +166,10 @@ function CameraPC._beginRotation(self: CameraPC): ()
 
 	self._isRotating = true
 	self._savedMouseBehavior = UserInputService.MouseBehavior
-	UserInputService.MouseBehavior = MOUSE_LOCK_BEHAVIOR
+	
+	if UserInputService.MouseBehavior ~= MOUSE_LOCK_BEHAVIOR then
+		UserInputService.MouseBehavior = MOUSE_LOCK_BEHAVIOR
+	end
 end
 
 function CameraPC._endRotation(self: CameraPC): ()
@@ -176,7 +178,9 @@ function CameraPC._endRotation(self: CameraPC): ()
 	end
 
 	self._isRotating = false
-	UserInputService.MouseBehavior = self._savedMouseBehavior
+	if UserInputService.MouseBehavior ~= self._savedMouseBehavior then
+		UserInputService.MouseBehavior = self._savedMouseBehavior
+	end
 end
 
 --[[
@@ -243,7 +247,7 @@ function CameraPC._onInputBegan(self: CameraPC, input: InputObject, gameProcesse
 			self:_beginRotation()
 		end
 	elseif input.KeyCode == Enum.KeyCode.LeftShift and not gameProcessed then
-		local orchestrator = self._orchestrator or require(script.Parent :: any)
+		local orchestrator = self._orchestrator
 		if orchestrator and typeof(orchestrator.ToggleShiftLock) == "function" then
 			orchestrator:ToggleShiftLock()
 		end
@@ -299,8 +303,13 @@ function CameraPC.Update(self: CameraPC, input: CameraPCUpdateInput): CameraCore
 			self:_endRotation()
 		end
 
-		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
-		UserInputService.MouseIconEnabled = false
+		-- Enforce mouse lock behavior only when it differs (avoids 2x overhead of continuous writes)
+		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCurrentPosition then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+		end
+		if UserInputService.MouseIconEnabled then
+			UserInputService.MouseIconEnabled = false
+		end
 
 		self:_applyDragRotation(UserInputService:GetMouseDelta())
 	else

@@ -7,7 +7,6 @@
 ]]
 
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
@@ -48,7 +47,8 @@ export type CameraCore = {
 	_smoothedDistance: number,
 	_raycastParams: RaycastParams,
 	_shiftLockActive: boolean,
-	_preSimulationConnection: RBXScriptConnection?,
+	_lastCharacter: Model?,
+	_lastRootPart: BasePart?,
 	
 	-- Methods
 	Update: (self: CameraCore, input: CameraUpdateInput) -> CameraUpdateOutput,
@@ -112,7 +112,8 @@ function CameraCore.new(config: CameraCoreConfig?): CameraCore
 	self._raycastParams.RespectCanCollide = true
 	
 	self._shiftLockActive = false
-	self._preSimulationConnection = nil
+	self._lastCharacter = nil
+	self._lastRootPart = nil
 
 	return (self :: any) :: CameraCore
 end
@@ -187,6 +188,26 @@ function CameraCore.Update(self: CameraCore, input: CameraUpdateInput): CameraUp
 		input.deltaTime
 	)
 
+	-- Direct character alignment to camera look vector on RenderStep (No physics thread sync overhead)
+	if self._shiftLockActive and LocalPlayer then
+		local character = LocalPlayer.Character
+		if character then
+			if character ~= self._lastCharacter then
+				self._lastCharacter = character
+				self._lastRootPart = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+			end
+			
+			local rootPart = self._lastRootPart
+			if rootPart then
+				local lookVector = input.rotation.LookVector
+				local horizontalLook = Vector3.new(lookVector.X, 0, lookVector.Z)
+				if horizontalLook.Magnitude > EPSILON then
+					rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + horizontalLook.Unit)
+				end
+			end
+		end
+	end
+
 	local focus = input.focusOrigin
 
 	-- Apply Shift Lock positional offset
@@ -221,36 +242,22 @@ end
 ]]
 function CameraCore.ApplyShiftLock(self: CameraCore, isActive: boolean): ()
 	self._shiftLockActive = isActive
-	
-	-- Clean up prior physics loop connections
-	if self._preSimulationConnection then
-		self._preSimulationConnection:Disconnect()
-		self._preSimulationConnection = nil
-	end
 
-	-- Configure mouse lock behavior and visibility
+	-- Configure mouse lock behavior and visibility safely
 	if isActive then
-		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
-		UserInputService.MouseIconEnabled = false
-
-		-- Align the character CFrame before the physics solver runs (PreSimulation).
-		self._preSimulationConnection = RunService.PreSimulation:Connect(function()
-			if not LocalPlayer then return end
-			local character = LocalPlayer.Character
-			if not character then return end
-			local rootPart = character:FindFirstChild("HumanoidRootPart") :: BasePart?
-			local camera = Workspace.CurrentCamera
-			if rootPart and camera then
-				local lookVector = camera.CFrame.LookVector
-				local horizontalLook = Vector3.new(lookVector.X, 0, lookVector.Z)
-				if horizontalLook.Magnitude > EPSILON then
-					rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + horizontalLook.Unit)
-				end
-			end
-		end)
+		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCurrentPosition then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+		end
+		if UserInputService.MouseIconEnabled then
+			UserInputService.MouseIconEnabled = false
+		end
 	else
-		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-		UserInputService.MouseIconEnabled = true
+		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		end
+		if not UserInputService.MouseIconEnabled then
+			UserInputService.MouseIconEnabled = true
+		end
 	end
 
 	-- Configure Humanoid AutoRotate state

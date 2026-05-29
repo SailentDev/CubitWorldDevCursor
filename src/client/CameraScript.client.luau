@@ -62,17 +62,25 @@ local function getShiftlockButton(): GuiButton?
 end
 
 --[[
-    Toggles the internal Shift Lock state and updates the underlying CameraCore instances.
+    Toggles the internal Shift Lock state and updates ONLY the active CameraCore instance.
 ]]
 function CameraScript:ToggleShiftLock(): ()
 	_isShiftLocked = not _isShiftLocked
 	
-	-- Update the active core logic instances
-	if _cameraPC and _cameraPC._core then
-		_cameraPC._core:ApplyShiftLock(_isShiftLocked)
-	end
-	if _cameraPhone and (_cameraPhone :: any)._core then
-		(_cameraPhone :: any)._core:ApplyShiftLock(_isShiftLocked)
+	if _isPCActive then
+		if _cameraPC and _cameraPC._core then
+			_cameraPC._core:ApplyShiftLock(_isShiftLocked)
+		end
+		if _cameraPhone and (_cameraPhone :: any)._core then
+			(_cameraPhone :: any)._core:ApplyShiftLock(false)
+		end
+	else
+		if _cameraPhone and (_cameraPhone :: any)._core then
+			(_cameraPhone :: any)._core:ApplyShiftLock(_isShiftLocked)
+		end
+		if _cameraPC and _cameraPC._core then
+			_cameraPC._core:ApplyShiftLock(false)
+		end
 	end
 end
 
@@ -102,8 +110,7 @@ end
 ]]
 local function setActiveController(device: "PC" | "Phone"): ()
 	local usePC = (device == "PC")
-	_isPCActive = usePC
-
+	
 	-- Control UI visibility based on the active controller
 	local button = getShiftlockButton()
 	if button then
@@ -111,22 +118,48 @@ local function setActiveController(device: "PC" | "Phone"): ()
 	end
 	
 	if usePC == _isPCActive then
-		if usePC then _cameraPC:Enable() else _cameraPhone:Enable() end
+		if usePC then 
+			_cameraPC:Enable() 
+			if _cameraPC._core then
+				_cameraPC._core:ApplyShiftLock(_isShiftLocked)
+			end
+		else 
+			_cameraPhone:Enable() 
+			if (_cameraPhone :: any)._core then
+				(_cameraPhone :: any)._core:ApplyShiftLock(_isShiftLocked)
+			end
+		end
 		return
 	end
 
 	local viewState: CameraViewState
-	if _isPCActive then
-		viewState = _cameraPC:GetViewState()
-		_cameraPC:Disable()
-		_cameraPhone:ApplyViewState(viewState)
-		_cameraPhone:Enable()
-	else
+	if usePC then
 		viewState = _cameraPhone:GetViewState()
 		_cameraPhone:Disable()
+		if (_cameraPhone :: any)._core then
+			(_cameraPhone :: any)._core:ApplyShiftLock(false)
+		end
+		
 		_cameraPC:ApplyViewState(viewState)
 		_cameraPC:Enable()
+		if _cameraPC._core then
+			_cameraPC._core:ApplyShiftLock(_isShiftLocked)
+		end
+	else
+		viewState = _cameraPC:GetViewState()
+		_cameraPC:Disable()
+		if _cameraPC._core then
+			_cameraPC._core:ApplyShiftLock(false)
+		end
+		
+		_cameraPhone:ApplyViewState(viewState)
+		_cameraPhone:Enable()
+		if (_cameraPhone :: any)._core then
+			(_cameraPhone :: any)._core:ApplyShiftLock(_isShiftLocked)
+		end
 	end
+
+	_isPCActive = usePC
 end
 
 --[[
