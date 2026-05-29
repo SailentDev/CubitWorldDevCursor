@@ -51,8 +51,7 @@ export type CameraPhone = {
 	_pinchZoomSensitivity: number,
 	_minPitch: number,
 	_maxPitch: number,
-	_yaw: number,
-	_pitch: number,
+	_rotation: CFrame,
 	_targetDistance: number,
 	_enabled: boolean,
 	_connections: { RBXScriptConnection },
@@ -79,13 +78,6 @@ local DEFAULT_MAX_PITCH = math.rad(70)
 
 local CameraPhone = {}
 CameraPhone.__index = CameraPhone
-
---[[
-	Builds the look CFrame passed into CameraCore.
-]]
-local function buildRotation(yaw: number, pitch: number): CFrame
-	return CFrame.fromEulerAnglesYXZ(pitch, yaw, 0)
-end
 
 local function getScreenPosition(input: InputObject): Vector2
 	return Vector2.new(input.Position.X, input.Position.Y)
@@ -114,8 +106,7 @@ function CameraPhone.new(config: CameraPhoneConfig?): CameraPhone
 	self._minPitch = resolvedConfig.minPitch or DEFAULT_MIN_PITCH
 	self._maxPitch = resolvedConfig.maxPitch or DEFAULT_MAX_PITCH
 
-	self._yaw = 0
-	self._pitch = 0
+	self._rotation = CFrame.identity
 	self._targetDistance = self._core:GetSmoothedDistance()
 	self._enabled = false
 	self._connections = {} :: { RBXScriptConnection }
@@ -128,7 +119,7 @@ function CameraPhone.new(config: CameraPhoneConfig?): CameraPhone
 end
 
 function CameraPhone.GetRotation(self: CameraPhone): CFrame
-	return buildRotation(self._yaw, self._pitch)
+	return self._rotation
 end
 
 function CameraPhone.GetTargetDistance(self: CameraPhone): number
@@ -136,7 +127,8 @@ function CameraPhone.GetTargetDistance(self: CameraPhone): number
 end
 
 function CameraPhone.GetYawPitch(self: CameraPhone): (number, number)
-	return self._yaw, self._pitch
+	local pitch, yaw, _ = self._rotation:ToEulerAnglesYXZ()
+	return yaw, pitch
 end
 
 function CameraPhone.GetSmoothedDistance(self: CameraPhone): number
@@ -145,22 +137,21 @@ end
 
 function CameraPhone.GetViewState(self: CameraPhone): CameraViewState
 	return {
-		rotation = buildRotation(self._yaw, self._pitch),
+		rotation = self._rotation,
 		targetDistance = self._targetDistance,
 		smoothedDistance = self._core:GetSmoothedDistance(),
 	}
 end
 
 function CameraPhone.ApplyViewState(self: CameraPhone, state: CameraViewState): ()
-	local pitch, yaw, _ = state.rotation:ToEulerAnglesYXZ()
-	self:SetRotation(yaw, pitch)
+	self._rotation = state.rotation
 	self._targetDistance = state.targetDistance
 	self._core:ResetZoom(state.smoothedDistance)
 end
 
 function CameraPhone.SetRotation(self: CameraPhone, yaw: number, pitch: number): ()
-	self._yaw = yaw
-	self._pitch = math.clamp(pitch, self._minPitch, self._maxPitch)
+	local clampedPitch = math.clamp(pitch, self._minPitch, self._maxPitch)
+	self._rotation = CFrame.fromEulerAnglesYXZ(clampedPitch, yaw, 0)
 end
 
 function CameraPhone.SetTargetDistance(self: CameraPhone, distance: number): ()
@@ -213,17 +204,36 @@ function CameraPhone._applyPinchZoom(self: CameraPhone): ()
 	self._lastPinchDistance = pinchDistance
 end
 
+--[[
+	Applies mobile drag input directly onto the unit vector direction.
+]]
 function CameraPhone._applyDragRotation(self: CameraPhone, screenDelta: Vector2): ()
 	if screenDelta.Magnitude <= 0 then
 		return
 	end
 
-	self._yaw -= screenDelta.X * self._yawSensitivity
-	self._pitch = math.clamp(
-		self._pitch - screenDelta.Y * self._pitchSensitivity,
-		self._minPitch,
-		self._maxPitch
-	)
+	local yawAngle = -screenDelta.X * self._yawSensitivity
+	local pitchAngle = -screenDelta.Y * self._pitchSensitivity
+
+	local look = self._rotation.LookVector
+	
+	local yawRotation = CFrame.fromAxisAngle(Vector3.new(0, 1, 0), yawAngle)
+	local newLook = yawRotation:VectorToWorldSpace(look)
+
+	local currentPitch = math.asin(math.clamp(newLook.Y, -0.9999, 0.9999))
+	local targetPitch = math.clamp(currentPitch + pitchAngle, self._minPitch, self._maxPitch)
+
+	local flatLook = Vector3.new(newLook.X, 0, newLook.Z)
+	if flatLook.Magnitude < 1e-4 then
+		flatLook = Vector3.new(self._rotation.RightVector.Z, 0, -self._rotation.RightVector.X)
+		if flatLook.Magnitude < 1e-4 then
+			flatLook = Vector3.new(0, 0, -1)
+		end
+	end
+	flatLook = flatLook.Unit
+
+	local finalLook = flatLook * math.cos(targetPitch) + Vector3.new(0, math.sin(targetPitch), 0)
+	self._rotation = CFrame.lookAt(Vector3.zero, finalLook)
 end
 
 function CameraPhone._onInputBegan(self: CameraPhone, input: InputObject, gameProcessed: boolean): ()
@@ -269,16 +279,13 @@ function CameraPhone._onInputChanged(self: CameraPhone, input: InputObject, game
 
 	self._activeTouches[input] = getScreenPosition(input)
 
-	-- If two valid camera fingers are down, process zoom
 	if self:_getActiveTouchCount() >= 2 then
-		-- Block zoom changes when Shift Lock is enabled
 		if not self._core._shiftLockActive then
 			self:_applyPinchZoom()
 		end
 		return
 	end
 
-	-- If only one valid camera finger is down, apply look rotation
 	local touchDelta = input.Delta
 	self:_applyDragRotation(Vector2.new(touchDelta.X, touchDelta.Y))
 end
@@ -337,7 +344,7 @@ end
 function CameraPhone.Update(self: CameraPhone, input: CameraPhoneUpdateInput): CameraCore.CameraUpdateOutput
 	return self._core:Update({
 		focusOrigin = input.focusOrigin,
-		rotation = buildRotation(self._yaw, self._pitch),
+		rotation = self._rotation,
 		targetDistance = self._targetDistance,
 		deltaTime = input.deltaTime,
 		filterInstances = input.filterInstances,

@@ -46,15 +46,15 @@ export type CameraPC = {
 	ApplyViewState: (self: CameraPC, state: CameraViewState) -> (),
 	SetRotation: (self: CameraPC, yaw: number, pitch: number) -> (),
 	SetTargetDistance: (self: CameraPC, distance: number) -> (),
--- Internal Properties
+	
+	-- Internal Properties
 	_core: CameraCore.CameraCore,
 	_yawSensitivity: number,
 	_pitchSensitivity: number,
 	_zoomStep: number,
 	_minPitch: number,
 	_maxPitch: number,
-	_yaw: number,
-	_pitch: number,
+	_rotation: CFrame,
 	_targetDistance: number,
 	_isRotating: boolean,
 	_enabled: boolean,
@@ -66,6 +66,7 @@ export type CameraPC = {
 	_disconnectAll: (self: CameraPC) -> (),
 	_beginRotation: (self: CameraPC) -> (),
 	_endRotation: (self: CameraPC) -> (),
+	_applyDragRotation: (self: CameraPC, mouseDelta: Vector2) -> (),
 	_onInputChanged: (self: CameraPC, input: InputObject, gameProcessed: boolean) -> (),
 	_onInputBegan: (self: CameraPC, input: InputObject, gameProcessed: boolean) -> (),
 	_onInputEnded: (self: CameraPC, input: InputObject, gameProcessed: boolean) -> (),
@@ -85,13 +86,6 @@ local CameraPC = {}
 CameraPC.__index = CameraPC
 
 --[[
-	Builds the look CFrame passed into CameraCore.
-]]
-local function buildRotation(yaw: number, pitch: number): CFrame
-	return CFrame.fromEulerAnglesYXZ(pitch, yaw, 0)
-end
-
---[[
 	Creates a PC camera controller backed by CameraCore.
 ]]
 function CameraPC.new(config: CameraPCConfig?): CameraPC
@@ -105,8 +99,7 @@ function CameraPC.new(config: CameraPCConfig?): CameraPC
 	self._minPitch = resolvedConfig.minPitch or DEFAULT_MIN_PITCH
 	self._maxPitch = resolvedConfig.maxPitch or DEFAULT_MAX_PITCH
 
-	self._yaw = 0
-	self._pitch = 0
+	self._rotation = CFrame.identity
 	self._targetDistance = self._core:GetSmoothedDistance()
 	self._isRotating = false
 	self._enabled = false
@@ -118,11 +111,12 @@ function CameraPC.new(config: CameraPCConfig?): CameraPC
 end
 
 function CameraPC.GetRotation(self: CameraPC): CFrame
-	return buildRotation(self._yaw, self._pitch)
+	return self._rotation
 end
 
 function CameraPC.GetYawPitch(self: CameraPC): (number, number)
-	return self._yaw, self._pitch
+	local pitch, yaw, _ = self._rotation:ToEulerAnglesYXZ()
+	return yaw, pitch
 end
 
 function CameraPC.GetTargetDistance(self: CameraPC): number
@@ -135,22 +129,21 @@ end
 
 function CameraPC.GetViewState(self: CameraPC): CameraViewState
 	return {
-		rotation = buildRotation(self._yaw, self._pitch),
+		rotation = self._rotation,
 		targetDistance = self._targetDistance,
 		smoothedDistance = self._core:GetSmoothedDistance(),
 	}
 end
 
 function CameraPC.ApplyViewState(self: CameraPC, state: CameraViewState): ()
-	local pitch, yaw, _ = state.rotation:ToEulerAnglesYXZ()
-	self:SetRotation(yaw, pitch)
+	self._rotation = state.rotation
 	self._targetDistance = state.targetDistance
 	self._core:ResetZoom(state.smoothedDistance)
 end
 
 function CameraPC.SetRotation(self: CameraPC, yaw: number, pitch: number): ()
-	self._yaw = yaw
-	self._pitch = math_clamp(pitch, self._minPitch, self._maxPitch)
+	local clampedPitch = math_clamp(pitch, self._minPitch, self._maxPitch)
+	self._rotation = CFrame.fromEulerAnglesYXZ(clampedPitch, yaw, 0)
 end
 
 function CameraPC.SetTargetDistance(self: CameraPC, distance: number): ()
@@ -186,13 +179,50 @@ function CameraPC._endRotation(self: CameraPC): ()
 	UserInputService.MouseBehavior = self._savedMouseBehavior
 end
 
+--[[
+	Applies 3D rotation using look vectors, preserving upright alignment
+	and clamping vertical pitch using vector projections.
+]]
+function CameraPC._applyDragRotation(self: CameraPC, mouseDelta: Vector2): ()
+	if mouseDelta.Magnitude <= 0 then
+		return
+	end
+
+	local yawAngle = -mouseDelta.X * self._yawSensitivity
+	local pitchAngle = -mouseDelta.Y * self._pitchSensitivity
+
+	local look = self._rotation.LookVector
+	
+	-- Rotate yaw around global up-axis
+	local yawRotation = CFrame.fromAxisAngle(Vector3.new(0, 1, 0), yawAngle)
+	local newLook = yawRotation:VectorToWorldSpace(look)
+
+	-- Calculate vertical pitch angle from look vector
+	local currentPitch = math.asin(math_clamp(newLook.Y, -0.9999, 0.9999))
+	local targetPitch = math_clamp(currentPitch + pitchAngle, self._minPitch, self._maxPitch)
+
+	-- Resolve horizontal direction components
+	local flatLook = Vector3.new(newLook.X, 0, newLook.Z)
+	if flatLook.Magnitude < 1e-4 then
+		-- Fallback to right vector direction if looking straight up or down
+		flatLook = Vector3.new(self._rotation.RightVector.Z, 0, -self._rotation.RightVector.X)
+		if flatLook.Magnitude < 1e-4 then
+			flatLook = Vector3.new(0, 0, -1)
+		end
+	end
+	flatLook = flatLook.Unit
+
+	-- Rebuild LookVector and generate new CFrame orientation
+	local finalLook = flatLook * math.cos(targetPitch) + Vector3.new(0, math.sin(targetPitch), 0)
+	self._rotation = CFrame.lookAt(Vector3.zero, finalLook)
+end
+
 function CameraPC._onInputChanged(self: CameraPC, input: InputObject, gameProcessed: boolean): ()
 	if not self._enabled or gameProcessed then
 		return
 	end
 
 	if input.UserInputType == MOUSE_WHEEL then
-		-- Block zoom adjustments when shift lock is active
 		if self._core._shiftLockActive then
 			return
 		end
@@ -209,7 +239,6 @@ function CameraPC._onInputBegan(self: CameraPC, input: InputObject, gameProcesse
 	end
 
 	if input.UserInputType == MOUSE_BUTTON_RIGHT then
-		-- Prevent right-click conflicts when shift lock is actively managing the mouse state
 		if not self._core._shiftLockActive then
 			self:_beginRotation()
 		end
@@ -266,27 +295,15 @@ function CameraPC.Update(self: CameraPC, input: CameraPCUpdateInput): CameraCore
 	local isShiftLocked = self._core._shiftLockActive
 
 	if isShiftLocked then
-		-- Terminate any ongoing manual RMB dragging state if shift lock was activated mid-drag
 		if self._isRotating then
 			self:_endRotation()
 		end
 
-		-- Ensure Shift Lock settings remain active and override other script requests.
-		-- LockCurrentPosition keeps the cursor exactly where it was on screen when Shift Lock started.
 		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
 		UserInputService.MouseIconEnabled = false
 
-		local mouseDelta = UserInputService:GetMouseDelta()
-		if mouseDelta.Magnitude > 0 then
-			self._yaw -= mouseDelta.X * self._yawSensitivity
-			self._pitch = math_clamp(
-				self._pitch - mouseDelta.Y * self._pitchSensitivity,
-				self._minPitch,
-				self._maxPitch
-			)
-		end
+		self:_applyDragRotation(UserInputService:GetMouseDelta())
 	else
-		-- Ensure default mouse visibility is restored when shift lock is turned off
 		if not UserInputService.MouseIconEnabled and not self._isRotating then
 			UserInputService.MouseIconEnabled = true
 		end
@@ -296,15 +313,7 @@ function CameraPC.Update(self: CameraPC, input: CameraPCUpdateInput): CameraCore
 				self:_beginRotation()
 			end
 
-			local mouseDelta = UserInputService:GetMouseDelta()
-			if mouseDelta.Magnitude > 0 then
-				self._yaw -= mouseDelta.X * self._yawSensitivity
-				self._pitch = math_clamp(
-					self._pitch - mouseDelta.Y * self._pitchSensitivity,
-					self._minPitch,
-					self._maxPitch
-				)
-			end
+			self:_applyDragRotation(UserInputService:GetMouseDelta())
 		elseif self._isRotating then
 			self:_endRotation()
 		end
@@ -312,7 +321,7 @@ function CameraPC.Update(self: CameraPC, input: CameraPCUpdateInput): CameraCore
 
 	return self._core:Update({
 		focusOrigin = input.focusOrigin,
-		rotation = buildRotation(self._yaw, self._pitch),
+		rotation = self._rotation,
 		targetDistance = self._targetDistance,
 		deltaTime = input.deltaTime,
 		filterInstances = input.filterInstances,

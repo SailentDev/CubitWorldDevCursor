@@ -28,7 +28,7 @@ local jumpButton = gameHUD:WaitForChild("JumpButton") :: ImageButton
 
 -- REFERENCES
 local modulesFolder = script.Parent:WaitForChild("modules") :: Folder
-local ControllersFolder = modulesFolder:WaitForChild("Controllers") :: Folder
+local ControllersFolder = modulesFolder:WaitForChild("controllers") :: Folder
 
 local InputManager = require(ControllersFolder:WaitForChild("InputManager")) :: InputManagerModule
 local ControlPC = require(ControllersFolder:WaitForChild("ControlPC")) :: ControlModule

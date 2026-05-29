@@ -12,7 +12,7 @@ local Workspace = game:GetService("Workspace")
 
 -- Modules
 local Modules = script.Parent.modules
-local Controllers = Modules.Controllers
+local Controllers = Modules.controllers
 
 local CameraPC = require(Controllers.CameraPC)
 local CameraPhone = require(Controllers.CameraPhone)
