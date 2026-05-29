@@ -8,7 +8,6 @@ local RegionTracker = {}
 local cachedRegion: string = "Loading..."
 local isFetched = false
 
--- Fallback chain definition of reliable GeoIP APIs
 type Endpoint = {
 	Url: string,
 	Extract: (data: any) -> string?
@@ -16,26 +15,29 @@ type Endpoint = {
 
 local API_ENDPOINTS: { Endpoint } = {
 	{
+		-- Target: ip-api.com (Extracts Country Name, e.g., "Germany")
 		Url = "http://ip-api.com/json/",
 		Extract = function(data: any)
-			return data.city or data.regionName or data.country
+			return data.country or data.regionName or data.city
 		end
 	},
 	{
+		-- Target: ipwho.is (Extracts Country Name, e.g., "Germany")
 		Url = "https://ipwho.is/",
 		Extract = function(data: any)
-			return data.city or data.region or data.country
+			return data.country or data.region or data.city
 		end
 	},
 	{
+		-- Target: ipapi.co (Extracts Country Name, e.g., "Germany")
 		Url = "https://ipapi.co/json/",
 		Extract = function(data: any)
-			return data.city or data.region or data.country_name
+			return data.country_name or data.region or data.city
 		end
 	}
 }
 
--- Sequentially queries APIs until one successfully resolves our location
+-- Sequentially queries APIs until one successfully resolves the location
 local function fetchLocationAsync()
 	local successResolved = false
 
@@ -64,7 +66,7 @@ local function fetchLocationAsync()
 		task.wait(0.1)
 	end
 
-	-- Ultimate fallback if Roblox outbound server IPs are rate-limited globally across all APIs
+	-- Ultimate fallback if Roblox outbound server IPs are rate-limited globally
 	if not successResolved then
 		if RunService:IsStudio() then
 			cachedRegion = "Studio Mode"

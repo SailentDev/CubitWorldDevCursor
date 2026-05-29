@@ -3,9 +3,11 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
+-- Service requirements
 local DataManager = require(ServerScriptService.services.DataManager)
 local SettingsServer = require(ServerScriptService.services.SettingsServer)
 local RegionTracker = require(ServerScriptService.services.RegionTracker)
+local ServerOptimization = require(ServerScriptService.services.ServerOptimization)
 local Types = require(ReplicatedStorage.Shared.Types)
 
 -- Explicitly targeting the Blink server network module
@@ -13,6 +15,9 @@ local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
 
 local ACTION_COOLDOWN = 0.1
 local lastRequestTimes: { [Player]: number } = {}
+
+-- Initialize optimizations module
+ServerOptimization.Init()
 
 -- Listen for client setting updates
 Blink.UpdateSettings.On(function(player: Player, data: any)
