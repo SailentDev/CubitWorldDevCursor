@@ -1,9 +1,5 @@
 --!strict
---[[
-    ControlPhone Module (Fixed)
-    Features: Dynamic Joystick (Bottom-Left Zone) and Continuous Jump.
-    Fix: Resets JoystickThumb to center on every new touch.
-]]
+--[[ ControlPhone Module (Fixed) Features: Dynamic Joystick and Continuous Jump. ]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -11,16 +7,21 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 -- TYPES
-export type ControlPhone = { 
-	Enable: (self: ControlPhone) -> (), 
-	Disable: (self: ControlPhone) -> () 
+export type ControlPhone = {
+	Enable: (self: ControlPhone) -> (),
+	Disable: (self: ControlPhone) -> ()
 }
 
-type JoystickData = { 
-	IsDragging: boolean, 
-	TouchId: InputObject?, 
-	MoveVector: Vector2 
+type JoystickData = {
+	IsDragging: boolean,
+	TouchId: InputObject?,
+	MoveVector: Vector2
 }
+
+-- CONFIGURATION (Change these to adjust the active zone)
+-- 0.5 represents 50% of the screen. 
+local ZONE_WIDTH_LIMIT = 0.4   -- Maximum percentage from left (0.5 = left half)
+local ZONE_HEIGHT_LIMIT = 0.33  -- Minimum percentage from top (0.5 = bottom half)
 
 -- MICRO-OPTIMIZATIONS
 local V3_NEW = Vector3.new
@@ -31,11 +32,7 @@ local MATH_MIN = math.min
 -- PRIVATE STATE
 local _player = Players.LocalPlayer
 local _activeConnections: { RBXScriptConnection } = {}
-local _joystickState: JoystickData = { 
-	IsDragging = false, 
-	TouchId = nil, 
-	MoveVector = V2_NEW(0, 0) 
-}
+local _joystickState: JoystickData = { IsDragging = false, TouchId = nil, MoveVector = V2_NEW(0, 0) }
 local _isJumping = false
 
 -- UI REFERENCES
@@ -47,12 +44,14 @@ local ControlPhone = {} :: ControlPhone
 
 -- PRIVATE FUNCTIONS
 
---[[ Checks if a touch position is in the bottom-left quadrant (50% width, 50% height) ]]
+--[[ Checks if a touch position is within the configured screen zone ]]
 local function isWithinTouchZone(pos: Vector3): boolean
 	local camera = Workspace.CurrentCamera
 	if not camera then return false end
 	local screenSize = camera.ViewportSize
-	return pos.X < (screenSize.X * 0.5) and pos.Y > (screenSize.Y * 0.5)
+	
+	-- Checks if position is within the left and bottom boundaries
+	return pos.X < (screenSize.X * ZONE_WIDTH_LIMIT) and pos.Y > (screenSize.Y * ZONE_HEIGHT_LIMIT)
 end
 
 --[[ Main update loop for movement and jumping ]]
@@ -84,7 +83,7 @@ end
 --[[ Updates the visual position of the thumb and the MoveVector ]]
 local function updateJoystickPosition(input: InputObject): ()
 	if not _joystickBase or not _joystickThumb then return end
-	
+
 	local basePos = _joystickBase.AbsolutePosition + (_joystickBase.AbsoluteSize / 2)
 	local diff = V2_NEW(input.Position.X, input.Position.Y) - basePos
 	local radius = _joystickBase.AbsoluteSize.X / 2
@@ -93,7 +92,7 @@ local function updateJoystickPosition(input: InputObject): ()
 
 	-- Update internal state for movement
 	_joystickState.MoveVector = dir * (dist / radius)
-	
+
 	-- Update UI position relative to base center
 	_joystickThumb.Position = UDim2.fromOffset(
 		(_joystickBase.AbsoluteSize.X / 2) + (dir.X * dist), 
@@ -105,7 +104,7 @@ end
 
 function ControlPhone:Enable(): ()
 	self:Disable() -- Ensure clean state
-	
+
 	local playerGui = _player:WaitForChild("PlayerGui")
 	local hud = playerGui:WaitForChild("GameHUD")
 	_joystickBase = hud:WaitForChild("JoystickBase") :: Frame
@@ -127,7 +126,7 @@ function ControlPhone:Enable(): ()
 				-- Move base to touch position
 				_joystickBase.Position = UDim2.fromOffset(input.Position.X, input.Position.Y)
 				
-				-- FIX: Explicitly reset thumb to center of the new base position
+				-- Explicitly reset thumb to center of the new base position
 				_joystickThumb.Position = UDim2.fromScale(0.5, 0.5)
 				_joystickState.MoveVector = V2_NEW(0, 0)
 				
@@ -163,13 +162,15 @@ function ControlPhone:Enable(): ()
 end
 
 function ControlPhone:Disable(): ()
-	for _, c in _activeConnections do c:Disconnect() end
+	for _, c in _activeConnections do
+		c:Disconnect()
+	end
 	table.clear(_activeConnections)
-	
+
 	_isJumping = false
 	_joystickState.IsDragging = false
 	_joystickState.MoveVector = V2_NEW(0, 0)
-	
+
 	if _joystickBase then 
 		_joystickBase.Visible = false 
 	end

@@ -6,9 +6,11 @@ local Lighting = game:GetService("Lighting")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Blink = require(ReplicatedStorage.Shared.Blink.network_client)
+local StatisticsTracker = require(script.Parent:WaitForChild("StatisticsTracker"))
 
 local SettingsClient = {}
 local isInitialized = false
+local isTrackerActive = false
 
 local cachedSettings: Types.Settings = {
 	FOV = 70,
@@ -17,7 +19,6 @@ local cachedSettings: Types.Settings = {
 	GlobalShadows = true,
 }
 
--- Prevent server packet overwrites from overriding fresh local changes
 local lastLocalUpdates: { [string]: number } = {}
 local SETTING_LOCK_DURATION = 1.2
 
@@ -26,7 +27,7 @@ SettingsClient.SettingsUpdated = settingsUpdatedSignal.Event
 
 local fovFill, fovController, fovValueLabel
 local musicFill, musicController, musicValueLabel
-local shadowsButton, showFpsButton
+local shadowsButton, statisticsButton, statisticsLabel
 
 local COLOR_ENABLED = Color3.fromRGB(46, 204, 113)
 local COLOR_DISABLED = Color3.fromRGB(231, 76, 60)
@@ -42,18 +43,36 @@ end
 local function updateVisuals()
 	if not isInitialized then return end
 	
+	-- FOV Progress Calculation
 	local fovPct = math.clamp((cachedSettings.FOV - 30) / 90, 0, 1)
 	fovFill.Size = UDim2.fromScale(fovPct, 1)
 	fovController.Position = UDim2.fromScale(fovPct, fovController.Position.Y.Scale)
 	fovValueLabel.Text = tostring(math.round(cachedSettings.FOV))
 
+	-- Music Progress Calculation
 	local musicPct = math.clamp(cachedSettings.MusicVol / 100, 0, 1)
 	musicFill.Size = UDim2.fromScale(musicPct, 1)
 	musicController.Position = UDim2.fromScale(musicPct, musicController.Position.Y.Scale)
 	musicValueLabel.Text = tostring(math.round(cachedSettings.MusicVol))
 
+	-- Standard toggles updates
 	shadowsButton.BackgroundColor3 = if cachedSettings.GlobalShadows then COLOR_ENABLED else COLOR_DISABLED
-	showFpsButton.BackgroundColor3 = if cachedSettings.ShowFPS then COLOR_ENABLED else COLOR_DISABLED
+	statisticsButton.BackgroundColor3 = if cachedSettings.ShowFPS then COLOR_ENABLED else COLOR_DISABLED
+
+	-- Manage performance statistics lifecycle
+	if cachedSettings.ShowFPS then
+		statisticsLabel.Visible = true
+		if not isTrackerActive then
+			isTrackerActive = true
+			StatisticsTracker.Init(statisticsLabel)
+		end
+	else
+		statisticsLabel.Visible = false
+		if isTrackerActive then
+			isTrackerActive = false
+			StatisticsTracker.Stop()
+		end
+	end
 
 	applyEngineSettings()
 end
@@ -66,7 +85,7 @@ function SettingsClient.UpdateSetting(settingName: string, value: any)
 	if (cachedSettings :: any)[settingName] == nil then return end
 	
 	cachedSettings[settingName] = value
-	lastLocalUpdates[settingName] = os.clock() -- Lock setting from server-reverts
+	lastLocalUpdates[settingName] = os.clock()
 	
 	updateVisuals()
 	settingsUpdatedSignal:Fire(settingName, value)
@@ -113,7 +132,7 @@ local function setupSlider(
 		valueLabel.Text = tostring(calculatedValue)
 		
 		cachedSettings[settingName] = calculatedValue
-		lastLocalUpdates[settingName] = os.clock() -- Prevent desync overrides while actively dragging
+		lastLocalUpdates[settingName] = os.clock()
 		
 		applyEngineSettings()
 		settingsUpdatedSignal:Fire(settingName, calculatedValue)
@@ -164,6 +183,7 @@ function SettingsClient.init()
 	local settingsFrame = settingsGui:WaitForChild("Settings", 5) :: Frame
 	if not settingsFrame then warn("[SettingsClient] Settings Frame missing") return end
 
+	-- Slider resolution
 	local fovSliderFrame = settingsFrame:WaitForChild("FovSliderFrame") :: Frame
 	local fovCanvasGroup = fovSliderFrame:WaitForChild("CanvasGroup") :: CanvasGroup
 	fovFill = fovCanvasGroup:WaitForChild("Fill") :: Frame
@@ -174,8 +194,10 @@ function SettingsClient.init()
 	musicFill = musicCanvasGroup:WaitForChild("Fill") :: Frame
 	musicController = musicCanvasGroup:WaitForChild("SliderController") :: GuiObject
 
+	-- Element connections
 	shadowsButton = settingsFrame:WaitForChild("ShadowsButton") :: GuiButton
-	showFpsButton = settingsFrame:WaitForChild("ShowFpsButton") :: GuiButton
+	statisticsButton = settingsFrame:WaitForChild("StatisticsButton") :: GuiButton
+	statisticsLabel = settingsGui:WaitForChild("StatisticsLabel") :: TextLabel
 	fovValueLabel = settingsFrame:WaitForChild("FovValue") :: TextLabel
 	musicValueLabel = settingsFrame:WaitForChild("MusicValue") :: TextLabel
 
@@ -188,7 +210,7 @@ function SettingsClient.init()
 		SettingsClient.UpdateSetting("GlobalShadows", not cachedSettings.GlobalShadows)
 	end)
 
-	showFpsButton.Activated:Connect(function()
+	statisticsButton.Activated:Connect(function()
 		SettingsClient.UpdateSetting("ShowFPS", not cachedSettings.ShowFPS)
 	end)
 
@@ -207,7 +229,6 @@ Blink.SyncSettings.On(function(validatedSettings: any)
 		
 		for key, val in pairs(validatedSettings) do
 			if (cachedSettings :: any)[key] ~= nil then
-				-- Accept server synchronization packets only if the local interaction lock window has elapsed
 				local lastUpdate = lastLocalUpdates[key] or 0
 				if now - lastUpdate > SETTING_LOCK_DURATION then
 					if (cachedSettings :: any)[key] ~= val then
