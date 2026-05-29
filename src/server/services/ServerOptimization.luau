@@ -35,13 +35,14 @@ local function cleanUpPlayer(player: Player)
 	end
 end
 
--- Disables collision and query overhead on accessories
+-- Disables collision, query, and redundant rendering properties on accessories
 local function optimizeAccessory(accessory: Accessory)
 	for _, descendant in ipairs(accessory:GetDescendants()) do
 		if descendant:IsA("BasePart") then
 			descendant.CanTouch = false
 			descendant.CanCollide = false
 			descendant.CanQuery = false
+			descendant.CastShadow = false -- Reduces lighting payload data replicated to clients
 		end
 	end
 end
@@ -52,9 +53,10 @@ local function optimizeCharacter(player: Player, character: Model)
 
 	local connections: { RBXScriptConnection } = {}
 
-	-- Helper function to apply part-specific configurations
+	-- Helper function to apply part-specific physics and rendering configurations
 	local function optimizePart(part: BasePart)
 		part.CollisionGroup = "Players"
+		part.CastShadow = false -- ROZWIĄZANIE: Wyłącza cień dla KAŻDEJ części ciała postaci (głowa, tors, kończyny)
 	end
 
 	-- Full scanning pass of the character
@@ -63,12 +65,13 @@ local function optimizeCharacter(player: Player, character: Model)
 			return
 		end
 
+		-- 1. Optimize Humanoid settings
 		local humanoid = character:FindFirstChildOfClass("Humanoid")
 		if humanoid then
-			-- Disable server-side scaling updates to limit joint recalculations
 			humanoid.AutomaticScalingEnabled = false
+			humanoid.BreakJointsOnDeath = false -- Prevents expensive joint-breaking calculations
 
-			-- Disable unnecessary physics/state check routines
+			-- Disable unnecessary physics state updates
 			humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
 			humanoid:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
 			humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
@@ -76,7 +79,18 @@ local function optimizeCharacter(player: Player, character: Model)
 			humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
 		end
 
-		-- Apply updates to existing structures
+		-- 2. Explicitly assign network ownership of the RootPart to the client
+		local rootPart = character:FindFirstChild("HumanoidRootPart")
+		if rootPart and rootPart:IsA("BasePart") then
+			-- Wrap in a pcall as SetNetworkOwner can fail if the character is in the middle of loading/removing
+			pcall(function()
+				if rootPart:CanSetNetworkOwnership() then
+					rootPart:SetNetworkOwner(player)
+				end
+			end)
+		end
+
+		-- 3. Optimize existing descendants
 		for _, descendant in ipairs(character:GetDescendants()) do
 			if descendant:IsA("FaceControls") then
 				descendant:Destroy()
@@ -87,7 +101,7 @@ local function optimizeCharacter(player: Player, character: Model)
 					descendant.CanCollide = false
 					descendant.CanQuery = false
 				end
-				optimizePart(descendant)
+				optimizePart(descendant) -- Ta funkcja teraz poprawnie zdejmuje cienie ze wszystkiego
 			elseif descendant:IsA("Accessory") then
 				optimizeAccessory(descendant)
 			end
@@ -100,7 +114,6 @@ local function optimizeCharacter(player: Player, character: Model)
 	-- Handle late-loading dynamic descendants (accessories, shirts, or faces)
 	local descAddedConn = character.DescendantAdded:Connect(function(descendant)
 		if descendant:IsA("FaceControls") then
-			-- Defer deletion to avoid structural errors during initialization
 			task.defer(function()
 				if descendant.Parent then
 					descendant:Destroy()
@@ -113,7 +126,7 @@ local function optimizeCharacter(player: Player, character: Model)
 				descendant.CanCollide = false
 				descendant.CanQuery = false
 			end
-			optimizePart(descendant)
+			optimizePart(descendant) -- Obsługa części doczytywanych w trakcie gry (np. ubrań z katalogu)
 		elseif descendant:IsA("Accessory") then
 			optimizeAccessory(descendant)
 		end
