@@ -17,6 +17,10 @@ local MAX_VOLUME = 100
 
 local playerDebounceThreads: { [Player]: thread? } = {}
 
+-- Zmienne do cooldownu z Twojego kodu
+local ACTION_COOLDOWN = 0.1
+local lastRequestTimes: { [Player]: number } = {}
+
 local function isNaN(value: number): boolean
 	return value ~= value
 end
@@ -44,7 +48,8 @@ function SettingsServer.ProcessUpdate(player: Player, incomingData: Types.Settin
 	if incomingData.MusicVol ~= nil then
 		local incomingVol = incomingData.MusicVol
 		if typeof(incomingVol) == "number" and not isNaN(incomingVol) then
-			local clamped = math.clamp(incomingVol, MIN_VOLUME, MAX_VOLUME)
+			-- POPRAWIONE: Usunięto zdublowane math.math
+			local clamped = math.clamp(incomingVol, MIN_VOLUME, MAX_VOLUME) 
 			if currentSettings.MusicVol ~= clamped then
 				currentSettings.MusicVol = clamped
 				dataChanged = true
@@ -87,11 +92,37 @@ function SettingsServer.ProcessUpdate(player: Player, incomingData: Types.Settin
 	end
 end
 
-Players.PlayerRemoving:Connect(function(player)
-	if playerDebounceThreads[player] then
-		task.cancel(playerDebounceThreads[player] :: thread)
-		playerDebounceThreads[player] = nil
-	end
-end)
+-- Funkcje dla Loader'a
+function SettingsServer.OnInit()
+	-- Przygotowanie modułu (puste, ale potrzebne dla architektury)
+end
+
+function SettingsServer.OnStart()
+	-- Kod odbierający zmiany ustawień od klienta
+	Blink.UpdateSettings.On(function(player: Player, data: any)
+		local now = os.clock()
+		local lastTime = lastRequestTimes[player] or 0
+
+		if now - lastTime < ACTION_COOLDOWN then
+			return
+		end
+
+		lastRequestTimes[player] = now
+
+		if typeof(data) == "table" then
+			SettingsServer.ProcessUpdate(player, data)
+		end
+	end)
+
+	-- Event PlayerRemoving na dół fazy OnStart
+	Players.PlayerRemoving:Connect(function(player)
+		if playerDebounceThreads[player] then
+			task.cancel(playerDebounceThreads[player] :: thread)
+			playerDebounceThreads[player] = nil
+		end
+		-- Dodatkowe czyszczenie dla Twojej tabeli cooldownów
+		lastRequestTimes[player] = nil
+	end)
+end
 
 return SettingsServer

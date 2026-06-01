@@ -136,8 +136,13 @@ local function optimizeCharacter(player: Player, character: Model)
 	characterConnections[player] = connections
 end
 
--- Initializes player connections and registers listeners
-function ServerOptimization.Init()
+-- DODANE: Wymagane przez ServerLoader do poprawnej rejestracji modułu
+function ServerOptimization.OnInit()
+	-- Puste przygotowanie (logika rejestracji eventów leci do OnStart)
+end
+
+-- ZMIENIONE: Zmieniono nazwę z 'Init' na 'OnStart', aby Loader mógł to automatycznie wywołać
+function ServerOptimization.OnStart()
 	local function onPlayerAdded(player: Player)
 		local connections: { RBXScriptConnection } = {}
 
