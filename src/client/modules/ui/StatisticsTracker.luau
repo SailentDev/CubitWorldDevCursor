@@ -1,47 +1,60 @@
 --!strict
-local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
--- Explicitly targeting the Blink client network module
+local RunService = game:GetService("RunService") -- DODANE: Liczy klatki gry
 local Blink = require(ReplicatedStorage.Shared.Blink.network_client)
 
 local StatisticsTracker = {}
-local heartbeatConnection: RBXScriptConnection? = nil
-local updateThread: thread? = nil
 
+local localPlayer = Players.LocalPlayer :: Player
 local frameCount = 0
-local serverRegion: string = "Loading..."
+local serverRegion = "Unknown"
 
-function StatisticsTracker.Init(label: TextLabel): ()
-	-- Safely reset running states to prevent duplicate routines
-	StatisticsTracker.Stop()
+-- Referencje do wątków i połączeń
+local updateThread: thread? = nil
+local heartbeatConnection: RBXScriptConnection? = nil
+local label: TextLabel? = nil 
 
-	frameCount = 0
-	
-	-- Increment frame count every frame (negligible performance footprint)
-	heartbeatConnection = RunService.Heartbeat:Connect(function()
-		frameCount += 1
-	end)
+function StatisticsTracker.OnInit()
+	-- Puste, bo SettingsClient przekazuje nam gotowy label bezpośrednio do OnStart
+end
 
-	local localPlayer = Players.LocalPlayer
+function StatisticsTracker.OnStart(passedLabel: TextLabel)
+	-- Łapiemy label przekazany z SettingsClient
+	label = passedLabel
 
-	-- Throttled update thread running once per second to minimize layout costs
-	updateThread = task.spawn(function()
-		while true do
-			task.wait(1)
-			
-			local currentFps = frameCount
-			frameCount = 0 -- Reset counter for next interval
+	-- SILNIK LICZNIKA: Co każdą klatkę gry dodajemy +1 do frameCount
+	if not heartbeatConnection then
+		heartbeatConnection = RunService.Heartbeat:Connect(function()
+			frameCount += 1
+		end)
+	end
 
-			local ping = 0
-			if localPlayer then
-				-- GetNetworkPing returns one-way latency in seconds
-				ping = math.round(localPlayer:GetNetworkPing() * 1000)
+	-- PĘTLA AKTUALIZUJĄCA: Co sekundę przepisuje wynik i go zeruje
+	if not updateThread then
+		updateThread = task.spawn(function()
+			while true do
+				task.wait(1)
+				
+				local currentFps = frameCount
+				frameCount = 0 -- Reset na nową sekundę
+				
+				local ping = 0
+				if localPlayer then
+					ping = math.round(localPlayer:GetNetworkPing() * 1000)
+				end
+				
+				if label then
+					label.Text = string.format("FPS: %d | Ping: %d ms | Region: %s", currentFps, ping, serverRegion)
+				end
 			end
+		end)
+	end
 
-			-- Updated to display our human-readable region instead of JobId
-			label.Text = string.format("FPS: %d | Ping: %d ms | Region: %s", currentFps, ping, serverRegion)
+	-- Nasłuchiwanie regionu z serwera
+	Blink.SyncRegion.On(function(regionName: string)
+		if typeof(regionName) == "string" then
+			serverRegion = regionName
 		end
 	end)
 end
@@ -56,12 +69,5 @@ function StatisticsTracker.Stop(): ()
 		updateThread = nil
 	end
 end
-
--- Listen for the Server's SyncRegion packet to update local memory cache
-Blink.SyncRegion.On(function(regionName: string)
-	if typeof(regionName) == "string" then
-		serverRegion = regionName
-	end
-end)
 
 return StatisticsTracker

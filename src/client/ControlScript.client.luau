@@ -20,8 +20,8 @@ local _activeController: ControlModule? = nil
 local _currentDevice: DeviceType? = nil
 
 -- UI REFERENCES
-local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+local player = Players.LocalPlayer :: Player
+local playerGui = player:WaitForChild("PlayerGui") :: PlayerGui
 local gameHUD = playerGui:WaitForChild("GameHUD") :: ScreenGui
 local joystickBase = gameHUD:WaitForChild("JoystickBase") :: Frame
 local jumpButton = gameHUD:WaitForChild("JumpButton") :: ImageButton

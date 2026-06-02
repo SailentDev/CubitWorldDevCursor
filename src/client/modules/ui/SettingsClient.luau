@@ -61,13 +61,13 @@ local function updateVisuals()
 
 	-- Manage performance statistics lifecycle
 	if cachedSettings.ShowFPS then
-		statisticsLabel.Visible = true
+		StatisticsLabel.Visible = true
 		if not isTrackerActive then
 			isTrackerActive = true
-			StatisticsTracker.Init(statisticsLabel)
+			StatisticsTracker.OnStart(StatisticsLabel)
 		end
 	else
-		statisticsLabel.Visible = false
+		StatisticsLabel.Visible = false
 		if isTrackerActive then
 			isTrackerActive = false
 			StatisticsTracker.Stop()
@@ -172,7 +172,7 @@ local function setupSlider(
 	end)
 end
 
-function SettingsClient.init()
+function SettingsClient.OnInit()
 	if isInitialized then return end
 	
 	local localPlayer = Players.LocalPlayer
@@ -197,7 +197,7 @@ function SettingsClient.init()
 	-- Element connections
 	shadowsButton = settingsFrame:WaitForChild("ShadowsButton") :: GuiButton
 	statisticsButton = settingsFrame:WaitForChild("StatisticsButton") :: GuiButton
-	statisticsLabel = settingsGui:WaitForChild("StatisticsLabel") :: TextLabel
+	StatisticsLabel = settingsGui:WaitForChild("StatisticsLabel") :: TextLabel
 	fovValueLabel = settingsFrame:WaitForChild("FovValue") :: TextLabel
 	musicValueLabel = settingsFrame:WaitForChild("MusicValue") :: TextLabel
 

@@ -7,7 +7,7 @@ local Players = game:GetService("Players")
 
 -- Types
 export type UIManagerModule = {
-    init: () -> (),
+    OnInit: () -> (),
     transitionFrame: (frame: Frame, targetPosition: UDim2, show: boolean) -> (),
     applyButtonFeedback: (button: GuiButton) -> ()
 }
@@ -184,7 +184,7 @@ end
     Initializes references, retrieves target frames/buttons based on PlayerGui structure,
     and applies automated setup behaviors.
 ]=]
-function UIManager.init(): ()
+function UIManager.OnInit(): ()
     -- Locate GUI hierarchies
     local mainHUD = playerGui:WaitForChild("MainHUD") :: ScreenGui
     local buttonsFrame = mainHUD:WaitForChild("Buttons") :: Frame
