@@ -34,11 +34,13 @@ function ServerLoader.Boot()
 		end
 		
 		if type(module) == "table" then
-			table.insert(initializedModules, module :: ServerModule)
+			local serverModule = module :: ServerModule
+			table.insert(initializedModules, serverModule)
 			
-			-- Jeśli moduł posiada funkcję OnInit, wykonujemy ją synchronicznie
-			if type(module.OnInit) == "function" then
-				local initSuccess, initError = pcall(module.OnInit)
+			-- Capture the optional property locally to allow successful type refinement
+			local initFn = serverModule.OnInit
+			if type(initFn) == "function" then
+				local initSuccess, initError = pcall(initFn)
 				if initSuccess then
 					print(`[⚙️ INIT] Pomyślnie przygotowano: {instance.Name}`)
 				else
@@ -54,10 +56,11 @@ function ServerLoader.Boot()
 	-- FAZA 2: OnStart (Asynchroniczne odpalenie głównej logiki i Blink)
 	-- =======================================================
 	for _, module in initializedModules do
-		if type(module.OnStart) == "function" then
+		local onStartFn = module.OnStart
+		if type(onStartFn) == "function" then
 			-- Odpalamy w osobnym wątku, by pętle/eventy jednego modułu nie blokowały kolejnych
 			task.spawn(function()
-				local startSuccess, startError = pcall(module.OnStart)
+				local startSuccess, startError = pcall(onStartFn)
 				if not startSuccess then
 					warn(`[❌ RUNTIME ERROR] Krytyczny błąd wykonania w fazie OnStart: {startError}`)
 				end

@@ -199,7 +199,6 @@ function SettingsClient.OnInit()
 		local settingsGui = playerGui:WaitForChild("SettingsGui", 15) :: ScreenGui
 		if not settingsGui then warn("[SettingsClient] SettingsGui missing") return end
 
-		
 		local settingsFrame = settingsGui:WaitForChild("Settings", 15) :: Frame
 		if not settingsFrame then warn("[SettingsClient] Settings Frame missing") return end
 

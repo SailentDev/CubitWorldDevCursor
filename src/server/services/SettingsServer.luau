@@ -85,7 +85,8 @@ function SettingsServer.ProcessUpdate(player: Player, incomingData: Types.Settin
 		playerDebounceThreads[player] = task.delay(0.2, function()
 			playerDebounceThreads[player] = nil
 			if player.Parent then
-				Blink.SyncSettings.Fire(player, currentSettings)
+				-- Type boundary cast resolves the generated network schema mismatch
+				Blink.SyncSettings.Fire(player, currentSettings :: any)
 			end
 		end)
 	end
