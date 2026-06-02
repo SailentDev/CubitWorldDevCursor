@@ -249,7 +249,7 @@ function CameraPC._onInputBegan(self: CameraPC, input: InputObject, gameProcesse
 	elseif input.KeyCode == Enum.KeyCode.LeftShift and not gameProcessed then
 		local orchestrator = self._orchestrator
 		if orchestrator and typeof(orchestrator.ToggleShiftLock) == "function" then
-			orchestrator:ToggleShiftLock()
+			(orchestrator :: any):ToggleShiftLock() -- Fixed colon-call warning via explicit cast
 		end
 	end
 end

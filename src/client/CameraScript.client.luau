@@ -17,10 +17,9 @@ local Controllers = Modules.controllers
 local CameraPC = require(Controllers.CameraPC)
 local CameraPhone = require(Controllers.CameraPhone)
 local InputManager = require(Controllers.InputManager)
-local CameraCore = require(Controllers.CameraCore)
 
 -- Types
-type CameraViewState = any -- Defined in CameraPC/Phone modules
+type CameraViewState = any -- Private internal state
 
 -- Constants
 local RENDER_STEP_NAME = "CubitCombatCustomCamera"
@@ -35,7 +34,7 @@ local cframe_new = CFrame.new
 local CameraScript = {}
 
 -- State
-local _player = Players.LocalPlayer
+local _player = Players.LocalPlayer :: Player
 local _isShiftLocked = false
 local _cameraPC = CameraPC.new({ orchestrator = CameraScript })
 local _cameraPhone = CameraPhone.new()
@@ -45,7 +44,7 @@ local _isPCActive = true
 local _currentCharacter: Model? = nil
 local _currentFilterInstances: { Instance } = {}
 
-local _playerGui = _player:WaitForChild("PlayerGui")
+local _playerGui = _player:WaitForChild("PlayerGui") :: PlayerGui
 local _buttonConnection: RBXScriptConnection? = nil
 
 --[[
@@ -68,8 +67,8 @@ function CameraScript:ToggleShiftLock(): ()
 	_isShiftLocked = not _isShiftLocked
 	
 	if _isPCActive then
-		if _cameraPC and _cameraPC._core then
-			_cameraPC._core:ApplyShiftLock(_isShiftLocked)
+		if _cameraPC and (_cameraPC :: any)._core then
+			(_cameraPC :: any)._core:ApplyShiftLock(_isShiftLocked)
 		end
 		if _cameraPhone and (_cameraPhone :: any)._core then
 			(_cameraPhone :: any)._core:ApplyShiftLock(false)
@@ -78,8 +77,8 @@ function CameraScript:ToggleShiftLock(): ()
 		if _cameraPhone and (_cameraPhone :: any)._core then
 			(_cameraPhone :: any)._core:ApplyShiftLock(_isShiftLocked)
 		end
-		if _cameraPC and _cameraPC._core then
-			_cameraPC._core:ApplyShiftLock(false)
+		if _cameraPC and (_cameraPC :: any)._core then
+			(_cameraPC :: any)._core:ApplyShiftLock(false)
 		end
 	end
 end
@@ -88,7 +87,7 @@ end
     Returns the world position the camera should look at.
 ]]
 local function getFocusOrigin(character: Model): Vector3?
-	local rootPart = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local rootPart: any = character:FindFirstChild("HumanoidRootPart")
 	if not rootPart then return nil end
 	return rootPart.Position + vector3_new(0, FOCUS_HEIGHT_OFFSET, 0)
 end
@@ -101,7 +100,7 @@ local function getFilterInstances(character: Model): { Instance }
 		return _currentFilterInstances
 	end
 	_currentCharacter = character
-	_currentFilterInstances = { character }
+	_currentFilterInstances = { character } :: { Instance } -- Table cast resolves table invariance warning
 	return _currentFilterInstances
 end
 
@@ -120,8 +119,8 @@ local function setActiveController(device: "PC" | "Phone"): ()
 	if usePC == _isPCActive then
 		if usePC then 
 			_cameraPC:Enable() 
-			if _cameraPC._core then
-				_cameraPC._core:ApplyShiftLock(_isShiftLocked)
+			if (_cameraPC :: any)._core then
+				(_cameraPC :: any)._core:ApplyShiftLock(_isShiftLocked)
 			end
 		else 
 			_cameraPhone:Enable() 
@@ -142,14 +141,14 @@ local function setActiveController(device: "PC" | "Phone"): ()
 		
 		_cameraPC:ApplyViewState(viewState)
 		_cameraPC:Enable()
-		if _cameraPC._core then
-			_cameraPC._core:ApplyShiftLock(_isShiftLocked)
+		if (_cameraPC :: any)._core then
+			(_cameraPC :: any)._core:ApplyShiftLock(_isShiftLocked)
 		end
 	else
 		viewState = _cameraPC:GetViewState()
 		_cameraPC:Disable()
-		if _cameraPC._core then
-			_cameraPC._core:ApplyShiftLock(false)
+		if (_cameraPC :: any)._core then
+			(_cameraPC :: any)._core:ApplyShiftLock(false)
 		end
 		
 		_cameraPhone:ApplyViewState(viewState)
@@ -191,13 +190,13 @@ local function onRenderStep(deltaTime: number): ()
 	local focusOrigin = getFocusOrigin(character)
 	if not focusOrigin then return end
 
-	local input = {
+	local input: any = {
 		focusOrigin = focusOrigin,
 		deltaTime = deltaTime,
 		filterInstances = getFilterInstances(character),
 	}
 
-	local output
+	local output: any
 	if _isPCActive then
 		output = _cameraPC:Update(input)
 	else
@@ -251,15 +250,25 @@ _cameraPC:Disable()
 _cameraPhone:Disable()
 
 -- Listen for device changes from InputManager
-InputManager:OnDeviceChanged(function(newDevice)
+InputManager:OnDeviceChanged(function(newDevice: "PC" | "Phone")
 	if _isCameraRunning then
 		setActiveController(newDevice)
 	end
 end)
 
-_player.CharacterAdded:Connect(startCamera)
-_player.CharacterRemoving:Connect(stopCamera)
-
-if _player.Character then
-	startCamera()
-end
+-- Non-blocking startup wrappers to prevent early-joining race conditions
+task.spawn(function()
+	local player = Players.LocalPlayer
+	if not player then
+		Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+		player = Players.LocalPlayer
+	end
+	local confirmedPlayer = player :: Player
+	
+	confirmedPlayer.CharacterAdded:Connect(startCamera)
+	confirmedPlayer.CharacterRemoving:Connect(stopCamera)
+	
+	if confirmedPlayer.Character then
+		startCamera()
+	end
+end)
