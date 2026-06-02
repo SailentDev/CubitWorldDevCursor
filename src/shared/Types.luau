@@ -4,6 +4,7 @@ export type Settings = {
 	MusicVol: number,
 	ShowFPS: boolean,
 	GlobalShadows: boolean,
+	[string]: any, -- Allows safe dynamic indexing without manual casting
 }
 
 export type SettingsUpdate = {
@@ -11,6 +12,7 @@ export type SettingsUpdate = {
 	MusicVol: number?,
 	ShowFPS: boolean?,
 	GlobalShadows: boolean?,
+	[string]: any, -- Allows safe dynamic indexing without manual casting
 }
 
 export type ProfileData = {

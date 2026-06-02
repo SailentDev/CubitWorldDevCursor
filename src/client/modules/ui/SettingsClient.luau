@@ -25,9 +25,10 @@ local SETTING_LOCK_DURATION = 1.2
 local settingsUpdatedSignal = Instance.new("BindableEvent")
 SettingsClient.SettingsUpdated = settingsUpdatedSignal.Event
 
-local fovFill, fovController, fovValueLabel
-local musicFill, musicController, musicValueLabel
-local shadowsButton, statisticsButton, statisticsLabel
+-- Explicit optional type annotations for upvalues
+local fovFill: Frame?, fovController: Frame?, fovValueLabel: TextLabel?
+local musicFill: Frame?, musicController: Frame?, musicValueLabel: TextLabel?
+local shadowsButton: TextButton?, statisticsButton: TextButton?, StatisticsLabel: TextLabel?
 
 local COLOR_ENABLED = Color3.fromRGB(46, 204, 113)
 local COLOR_DISABLED = Color3.fromRGB(231, 76, 60)
@@ -42,6 +43,17 @@ end
 
 local function updateVisuals()
 	if not isInitialized then return end
+	
+	-- Cast optional upvalues to guaranteed types to satisfy strict type-checking
+	local fovFill = fovFill :: Frame
+	local fovController = fovController :: Frame
+	local fovValueLabel = fovValueLabel :: TextLabel
+	local musicFill = musicFill :: Frame
+	local musicController = musicController :: Frame
+	local musicValueLabel = musicValueLabel :: TextLabel
+	local shadowsButton = shadowsButton :: TextButton
+	local statisticsButton = statisticsButton :: TextButton
+	local StatisticsLabel = StatisticsLabel :: TextLabel
 	
 	-- FOV Progress Calculation
 	local fovPct = math.clamp((cachedSettings.FOV - 30) / 90, 0, 1)
@@ -64,7 +76,7 @@ local function updateVisuals()
 		StatisticsLabel.Visible = true
 		if not isTrackerActive then
 			isTrackerActive = true
-			StatisticsTracker.OnStart(StatisticsLabel)
+			StatisticsTracker.Start(StatisticsLabel)
 		end
 	else
 		StatisticsLabel.Visible = false
@@ -78,11 +90,11 @@ local function updateVisuals()
 end
 
 function SettingsClient.GetSetting(settingName: string): any
-	return (cachedSettings :: any)[settingName]
+	return cachedSettings[settingName]
 end
 
 function SettingsClient.UpdateSetting(settingName: string, value: any)
-	if (cachedSettings :: any)[settingName] == nil then return end
+	if cachedSettings[settingName] == nil then return end
 	
 	cachedSettings[settingName] = value
 	lastLocalUpdates[settingName] = os.clock()
@@ -96,9 +108,9 @@ end
 
 local function setupSlider(
 	sliderFrame: Frame, 
-	canvasGroup: CanvasGroup,
+	canvasGroup: Frame,
 	fillFrame: Frame, 
-	sliderController: GuiObject,
+	sliderController: Frame, -- Changed from GuiObject to Frame to avoid abstract warning
 	valueLabel: TextLabel, 
 	settingName: "FOV" | "MusicVol", 
 	minValue: number, 
@@ -110,9 +122,9 @@ local function setupSlider(
 	fillFrame.Active = false
 	
 	pcall(function()
-		(canvasGroup :: any).Interactable = true
-		(fillFrame :: any).Interactable = false
-		(sliderController :: any).Interactable = true
+		canvasGroup.Interactable = true
+		fillFrame.Interactable = false
+		sliderController.Interactable = true
 	end)
 	
 	sliderController.AnchorPoint = Vector2.new(0.5, sliderController.AnchorPoint.Y)
@@ -175,51 +187,84 @@ end
 function SettingsClient.OnInit()
 	if isInitialized then return end
 	
-	local localPlayer = Players.LocalPlayer
-	local playerGui = localPlayer:WaitForChild("PlayerGui") :: PlayerGui
-	local settingsGui = playerGui:WaitForChild("SettingsGui", 5) :: ScreenGui
-	if not settingsGui then warn("[SettingsClient] SettingsGui missing") return end
-	
-	local settingsFrame = settingsGui:WaitForChild("Settings", 5) :: Frame
-	if not settingsFrame then warn("[SettingsClient] Settings Frame missing") return end
+	task.spawn(function()
+		local player = Players.LocalPlayer
+		if not player then
+			Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+			player = Players.LocalPlayer
+		end
+		local confirmedPlayer = player :: Player
+		
+		local playerGui = confirmedPlayer:WaitForChild("PlayerGui") :: PlayerGui
+		local settingsGui = playerGui:WaitForChild("SettingsGui", 15) :: ScreenGui
+		if not settingsGui then warn("[SettingsClient] SettingsGui missing") return end
 
-	-- Slider resolution
-	local fovSliderFrame = settingsFrame:WaitForChild("FovSliderFrame") :: Frame
-	local fovCanvasGroup = fovSliderFrame:WaitForChild("CanvasGroup") :: CanvasGroup
-	fovFill = fovCanvasGroup:WaitForChild("Fill") :: Frame
-	fovController = fovCanvasGroup:WaitForChild("SliderController") :: GuiObject
+		
+		local settingsFrame = settingsGui:WaitForChild("Settings", 15) :: Frame
+		if not settingsFrame then warn("[SettingsClient] Settings Frame missing") return end
 
-	local musicSliderFrame = settingsFrame:WaitForChild("MusicSliderFrame") :: Frame
-	local musicCanvasGroup = musicSliderFrame:WaitForChild("CanvasGroup") :: CanvasGroup
-	musicFill = musicCanvasGroup:WaitForChild("Fill") :: Frame
-	musicController = musicCanvasGroup:WaitForChild("SliderController") :: GuiObject
+		-- Slider resolution
+		local fovSliderFrame = settingsFrame:WaitForChild("FovSliderFrame") :: Frame
+		local fovCanvasGroup = fovSliderFrame:WaitForChild("CanvasGroup") :: Frame
+		local fovFillVal = fovCanvasGroup:WaitForChild("Fill") :: Frame
+		local fovControllerVal = fovCanvasGroup:WaitForChild("SliderController") :: Frame -- Changed to Frame
 
-	-- Element connections
-	shadowsButton = settingsFrame:WaitForChild("ShadowsButton") :: GuiButton
-	statisticsButton = settingsFrame:WaitForChild("StatisticsButton") :: GuiButton
-	StatisticsLabel = settingsGui:WaitForChild("StatisticsLabel") :: TextLabel
-	fovValueLabel = settingsFrame:WaitForChild("FovValue") :: TextLabel
-	musicValueLabel = settingsFrame:WaitForChild("MusicValue") :: TextLabel
+		local musicSliderFrame = settingsFrame:WaitForChild("MusicSliderFrame") :: Frame
+		local musicCanvasGroup = musicSliderFrame:WaitForChild("CanvasGroup") :: Frame
+		local musicFillVal = musicCanvasGroup:WaitForChild("Fill") :: Frame
+		local musicControllerVal = musicCanvasGroup:WaitForChild("SliderController") :: Frame -- Changed to Frame
 
-	isInitialized = true
+		-- Element connections
+		local shadowsButtonVal = settingsFrame:WaitForChild("ShadowsButton") :: TextButton
+		local statisticsButtonVal = settingsFrame:WaitForChild("StatisticsButton") :: TextButton
+		local StatisticsLabelVal = settingsGui:WaitForChild("StatisticsLabel") :: TextLabel
+		local fovValueLabelVal = settingsFrame:WaitForChild("FovValue") :: TextLabel
+		local musicValueLabelVal = settingsFrame:WaitForChild("MusicValue") :: TextLabel
 
-	setupSlider(fovSliderFrame, fovCanvasGroup, fovFill, fovController, fovValueLabel, "FOV", 30, 120)
-	setupSlider(musicSliderFrame, musicCanvasGroup, musicFill, musicController, musicValueLabel, "MusicVol", 0, 100)
+		-- Assign references to upvalues
+		fovFill = fovFillVal
+		fovController = fovControllerVal
+		fovValueLabel = fovValueLabelVal
 
-	shadowsButton.Activated:Connect(function()
-		SettingsClient.UpdateSetting("GlobalShadows", not cachedSettings.GlobalShadows)
+		musicFill = musicFillVal
+		musicController = musicControllerVal
+		musicValueLabel = musicValueLabelVal
+
+		shadowsButton = shadowsButtonVal
+		statisticsButton = statisticsButtonVal
+		StatisticsLabel = StatisticsLabelVal
+
+		isInitialized = true
+
+		-- Pass guaranteed non-nil local references to the slider setup
+		setupSlider(fovSliderFrame, fovCanvasGroup, fovFillVal, fovControllerVal, fovValueLabelVal, "FOV", 30, 120)
+		setupSlider(musicSliderFrame, musicCanvasGroup, musicFillVal, musicControllerVal, musicValueLabelVal, "MusicVol", 0, 100)
+
+		-- Connect events using local references to eliminate optional warnings
+		shadowsButtonVal.Activated:Connect(function()
+			SettingsClient.UpdateSetting("GlobalShadows", not cachedSettings.GlobalShadows)
+		end)
+
+		statisticsButtonVal.Activated:Connect(function()
+			SettingsClient.UpdateSetting("ShowFPS", not cachedSettings.ShowFPS)
+		end)
+
+		updateVisuals()
 	end)
-
-	statisticsButton.Activated:Connect(function()
-		SettingsClient.UpdateSetting("ShowFPS", not cachedSettings.ShowFPS)
-	end)
-
-	updateVisuals()
 end
 
-Players.LocalPlayer.CharacterAdded:Connect(function()
-	task.wait(0.2)
-	applyEngineSettings()
+task.spawn(function()
+	local player = Players.LocalPlayer
+	if not player then
+		Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+		player = Players.LocalPlayer
+	end
+	local confirmedPlayer = player :: Player
+	
+	confirmedPlayer.CharacterAdded:Connect(function()
+		task.wait(0.2)
+		applyEngineSettings()
+	end)
 end)
 
 Blink.SyncSettings.On(function(validatedSettings: any)
@@ -227,12 +272,12 @@ Blink.SyncSettings.On(function(validatedSettings: any)
 		local changed = false
 		local now = os.clock()
 		
-		for key, val in pairs(validatedSettings) do
-			if (cachedSettings :: any)[key] ~= nil then
+		for key, val in pairs(validatedSettings :: { [string]: any }) do
+			if cachedSettings[key] ~= nil then
 				local lastUpdate = lastLocalUpdates[key] or 0
 				if now - lastUpdate > SETTING_LOCK_DURATION then
-					if (cachedSettings :: any)[key] ~= val then
-						(cachedSettings :: any)[key] = val
+					if cachedSettings[key] ~= val then
+						cachedSettings[key] = val
 						settingsUpdatedSignal:Fire(key, val)
 						changed = true
 					end

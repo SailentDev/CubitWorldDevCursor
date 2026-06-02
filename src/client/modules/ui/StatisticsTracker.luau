@@ -1,7 +1,7 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService") -- DODANE: Liczy klatki gry
+local RunService = game:GetService("RunService")
 local Blink = require(ReplicatedStorage.Shared.Blink.network_client)
 
 local StatisticsTracker = {}
@@ -16,11 +16,10 @@ local heartbeatConnection: RBXScriptConnection? = nil
 local label: TextLabel? = nil 
 
 function StatisticsTracker.OnInit()
-	-- Puste, bo SettingsClient przekazuje nam gotowy label bezpośrednio do OnStart
+	-- Puste, bo SettingsClient przekazuje nam gotowy label bezpośrednio do Start
 end
 
-function StatisticsTracker.OnStart(passedLabel: TextLabel)
-	-- Łapiemy label przekazany z SettingsClient
+function StatisticsTracker.Start(passedLabel: TextLabel)
 	label = passedLabel
 
 	-- SILNIK LICZNIKA: Co każdą klatkę gry dodajemy +1 do frameCount
@@ -44,15 +43,17 @@ function StatisticsTracker.OnStart(passedLabel: TextLabel)
 					ping = math.round(localPlayer:GetNetworkPing() * 1000)
 				end
 				
-				if label then
-					label.Text = string.format("FPS: %d | Ping: %d ms | Region: %s", currentFps, ping, serverRegion)
+				-- FIX: Capture the upvalue locally inside the loop to preserve type refinement
+				local currentLabel = label
+				if currentLabel then
+					currentLabel.Text = string.format("FPS: %d | Ping: %d ms | Region: %s", currentFps, ping, serverRegion)
 				end
 			end
 		end)
 	end
 
-	-- Nasłuchiwanie regionu z serwera
-	Blink.SyncRegion.On(function(regionName: string)
+	-- Nasłuchiwanie regionu z serwera (Typ parametru jest automatycznie wnioskowany przez Blink)
+	Blink.SyncRegion.On(function(regionName)
 		if typeof(regionName) == "string" then
 			serverRegion = regionName
 		end
