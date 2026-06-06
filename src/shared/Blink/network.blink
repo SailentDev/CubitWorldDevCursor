@@ -1,5 +1,5 @@
-option ClientOutput = "C:\Users\PC\Desktop\BlinkSetup\network_client.luau"
-option ServerOutput = "C:\Users\PC\Desktop\BlinkSetup\network_server.luau"
+option ClientOutput = "C:\Users\PC\Documents\CubitWorldDevCursor\src\shared\Blink\network_client.luau"
+option ServerOutput = "C:\Users\PC\Documents\CubitWorldDevCursor\src\shared\Blink\network_server.luau"
 
 struct SettingsUpdate {
     FOV: u8?,
@@ -8,6 +8,34 @@ struct SettingsUpdate {
     GlobalShadows: boolean?
 }
 
+struct PetInstance {
+    Id: string,
+    Damage: f32,
+    Health: f32
+}
+
+struct ProfileData {
+    Coins: f64,
+    Inventory: map{[string]: PetInstance},
+    Equipped: map{[string]: boolean},
+    OwnedEggs: map{[string]: u16},
+    MaxSlots: u16,
+    Settings: SettingsUpdate
+}
+
+struct EggResult {
+    success: boolean,
+    reason: string?,
+    petUuid: string?,
+    petId: string?
+}
+
+struct HatchEggPayload {
+    eggId: string,
+    amount: u8
+}
+
+-- Existing Settings and Region Events
 event UpdateSettings {
     From: Client,
     Type: Reliable,
@@ -27,4 +55,55 @@ event SyncRegion {
     Type: Reliable,
     Call: SingleSync,
     Data: string
+}
+
+-- Existing Egg Events
+event UnboxEgg {
+    From: Client,
+    Type: Reliable,
+    Call: SingleAsync,
+    Data: string
+}
+
+event EggUnboxedResult {
+    From: Server,
+    Type: Reliable,
+    Call: SingleAsync,
+    Data: EggResult
+}
+
+-- New Explicit Events
+event BuyEggRequest {
+    From: Client,
+    Type: Reliable,
+    Call: SingleAsync,
+    Data: string
+}
+
+event HatchEggRequest {
+    From: Client,
+    Type: Reliable,
+    Call: SingleAsync,
+    Data: HatchEggPayload
+}
+
+event EquipPetRequest {
+    From: Client,
+    Type: Reliable,
+    Call: SingleAsync,
+    Data: string
+}
+
+event UnequipPetRequest {
+    From: Client,
+    Type: Reliable,
+    Call: SingleAsync,
+    Data: string
+}
+
+event SyncData {
+    From: Server,
+    Type: Reliable,
+    Call: SingleSync,
+    Data: ProfileData
 }

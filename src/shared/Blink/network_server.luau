@@ -162,7 +162,16 @@ local Queue: any = {
 local SerdesEvent = "?"
 local SerdesThread: thread?
 Queue.Reliable[0] = table.create(256)
+Queue.Reliable[3] = table.create(256)
+Queue.Reliable[5] = table.create(256)
+Queue.Reliable[6] = table.create(256)
+Queue.Reliable[7] = table.create(256)
+Queue.Reliable[8] = table.create(256)
 export type SettingsUpdate = { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? }
+export type PetInstance = { Id: string, Damage: number, Health: number }
+export type ProfileData = { Coins: number, Inventory: {[string]: { Id: string, Damage: number, Health: number }}, Equipped: {[string]: boolean}, OwnedEggs: {[string]: number}, MaxSlots: number, Settings: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? } }
+export type EggResult = { success: boolean, reason: string?, petUuid: string?, petId: string? }
+export type HatchEggPayload = { eggId: string, amount: number }
 function SerdesFunctions.ReadEVENT_UpdateSettings(): ({ FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? })
 	-- Read BLOCK: 4 bytes
 	local BLOCK_START = Read(4)
@@ -230,6 +239,157 @@ function SerdesFunctions.WriteEVENT_SyncRegion(Value: string): ()
 	buffer.writestring(SendBuffer, SendOffset, Value, Length)
 end
 
+function SerdesFunctions.ReadEVENT_UnboxEgg(): (string)
+	-- Read BLOCK: 2 bytes
+	local BLOCK_START = Read(2)
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+	local Value = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	return Value
+end
+
+function SerdesFunctions.WriteEVENT_EggUnboxedResult(Value: { success: boolean, reason: string?, petUuid: string?, petId: string? }): ()
+	-- Allocate BLOCK: 5 bytes
+	local BLOCK_START = Allocate(5)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 4)
+	buffer.writeu8(SendBuffer, BLOCK_START + 1, Value.success and 1 or 0)
+	buffer.writeu8(SendBuffer, BLOCK_START + 2, Value.reason ~= nil and 1 or 0)
+	if Value.reason ~= nil then
+		-- Allocate BLOCK: 2 bytes
+		local BLOCK_START = Allocate(2)
+		local Length = #Value.reason
+		buffer.writeu16(SendBuffer, BLOCK_START + 0, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Value.reason, Length)
+	end
+	buffer.writeu8(SendBuffer, BLOCK_START + 3, Value.petUuid ~= nil and 1 or 0)
+	if Value.petUuid ~= nil then
+		-- Allocate BLOCK: 2 bytes
+		local BLOCK_START = Allocate(2)
+		local Length = #Value.petUuid
+		buffer.writeu16(SendBuffer, BLOCK_START + 0, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Value.petUuid, Length)
+	end
+	buffer.writeu8(SendBuffer, BLOCK_START + 4, Value.petId ~= nil and 1 or 0)
+	if Value.petId ~= nil then
+		-- Allocate BLOCK: 2 bytes
+		local BLOCK_START = Allocate(2)
+		local Length = #Value.petId
+		buffer.writeu16(SendBuffer, BLOCK_START + 0, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Value.petId, Length)
+	end
+end
+
+function SerdesFunctions.ReadEVENT_BuyEggRequest(): (string)
+	-- Read BLOCK: 2 bytes
+	local BLOCK_START = Read(2)
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+	local Value = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	return Value
+end
+
+function SerdesFunctions.ReadEVENT_HatchEggRequest(): ({ eggId: string, amount: number })
+	-- Read BLOCK: 3 bytes
+	local BLOCK_START = Read(3)
+	local Value = {} :: any
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+	Value.eggId = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	Value.amount = buffer.readu8(RecieveBuffer, BLOCK_START + 2)
+	return Value
+end
+
+function SerdesFunctions.ReadEVENT_EquipPetRequest(): (string)
+	-- Read BLOCK: 2 bytes
+	local BLOCK_START = Read(2)
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+	local Value = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	return Value
+end
+
+function SerdesFunctions.ReadEVENT_UnequipPetRequest(): (string)
+	-- Read BLOCK: 2 bytes
+	local BLOCK_START = Read(2)
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+	local Value = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	return Value
+end
+
+function SerdesFunctions.WriteEVENT_SyncData(Value: { Coins: number, Inventory: {[string]: { Id: string, Damage: number, Health: number }}, Equipped: {[string]: boolean}, OwnedEggs: {[string]: number}, MaxSlots: number, Settings: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? } }): ()
+	-- Allocate BLOCK: 21 bytes
+	local BLOCK_START = Allocate(21)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 9)
+	buffer.writef64(SendBuffer, BLOCK_START + 1, Value.Coins)
+	local Elements_1 = 0
+	for Key_1, Element_1 in Value.Inventory do
+		Elements_1 += 1
+		local Length = #Key_1
+		local OFFSET_0 = Allocate(2)
+		buffer.writeu16(SendBuffer, OFFSET_0, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Key_1, Length)
+		local Length = #Element_1.Id
+		local OFFSET_1 = Allocate(2)
+		buffer.writeu16(SendBuffer, OFFSET_1, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Element_1.Id, Length)
+		local OFFSET_2 = Allocate(4)
+		buffer.writef32(SendBuffer, OFFSET_2, Element_1.Damage)
+		local OFFSET_3 = Allocate(4)
+		buffer.writef32(SendBuffer, OFFSET_3, Element_1.Health)
+	end
+	buffer.writeu16(SendBuffer, BLOCK_START + 9, Elements_1)
+	local Elements_1 = 0
+	for Key_1, Element_1 in Value.Equipped do
+		Elements_1 += 1
+		local Length = #Key_1
+		local OFFSET_0 = Allocate(2)
+		buffer.writeu16(SendBuffer, OFFSET_0, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Key_1, Length)
+		local OFFSET_1 = Allocate(1)
+		buffer.writeu8(SendBuffer, OFFSET_1, Element_1 and 1 or 0)
+	end
+	buffer.writeu16(SendBuffer, BLOCK_START + 11, Elements_1)
+	local Elements_1 = 0
+	for Key_1, Element_1 in Value.OwnedEggs do
+		Elements_1 += 1
+		local Length = #Key_1
+		local OFFSET_0 = Allocate(2)
+		buffer.writeu16(SendBuffer, OFFSET_0, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Key_1, Length)
+		local OFFSET_1 = Allocate(2)
+		buffer.writeu16(SendBuffer, OFFSET_1, Element_1)
+	end
+	buffer.writeu16(SendBuffer, BLOCK_START + 13, Elements_1)
+	buffer.writeu16(SendBuffer, BLOCK_START + 15, Value.MaxSlots)
+	buffer.writeu8(SendBuffer, BLOCK_START + 17, Value.Settings.FOV ~= nil and 1 or 0)
+	if Value.Settings.FOV ~= nil then
+		-- Allocate BLOCK: 1 bytes
+		local BLOCK_START = Allocate(1)
+		buffer.writeu8(SendBuffer, BLOCK_START + 0, Value.Settings.FOV)
+	end
+	buffer.writeu8(SendBuffer, BLOCK_START + 18, Value.Settings.MusicVol ~= nil and 1 or 0)
+	if Value.Settings.MusicVol ~= nil then
+		-- Allocate BLOCK: 1 bytes
+		local BLOCK_START = Allocate(1)
+		buffer.writeu8(SendBuffer, BLOCK_START + 0, Value.Settings.MusicVol)
+	end
+	buffer.writeu8(SendBuffer, BLOCK_START + 19, Value.Settings.ShowFPS ~= nil and 1 or 0)
+	if Value.Settings.ShowFPS ~= nil then
+		-- Allocate BLOCK: 1 bytes
+		local BLOCK_START = Allocate(1)
+		buffer.writeu8(SendBuffer, BLOCK_START + 0, Value.Settings.ShowFPS and 1 or 0)
+	end
+	buffer.writeu8(SendBuffer, BLOCK_START + 20, Value.Settings.GlobalShadows ~= nil and 1 or 0)
+	if Value.Settings.GlobalShadows ~= nil then
+		-- Allocate BLOCK: 1 bytes
+		local BLOCK_START = Allocate(1)
+		buffer.writeu8(SendBuffer, BLOCK_START + 0, Value.Settings.GlobalShadows and 1 or 0)
+	end
+end
+
 if not RunService:IsRunning() then
 	local NOOP = function() end
 	local Returns = table.freeze({
@@ -243,6 +403,33 @@ if not RunService:IsRunning() then
 		FireExcept = NOOP
 	},
 	SyncRegion = {
+		Fire = NOOP,
+		FireAll = NOOP,
+		FireList = NOOP,
+		FireExcept = NOOP
+	},
+	UnboxEgg = {
+		On = NOOP
+	},
+	EggUnboxedResult = {
+		Fire = NOOP,
+		FireAll = NOOP,
+		FireList = NOOP,
+		FireExcept = NOOP
+	},
+	BuyEggRequest = {
+		On = NOOP
+	},
+	HatchEggRequest = {
+		On = NOOP
+	},
+	EquipPetRequest = {
+		On = NOOP
+	},
+	UnequipPetRequest = {
+		On = NOOP
+	},
+	SyncData = {
 		Fire = NOOP,
 		FireAll = NOOP,
 		FireList = NOOP,
@@ -319,6 +506,56 @@ Reliable.OnServerEvent:Connect(function(Player: Player, Buffer: buffer, Instance
 					warn("[Blink]: Event queue of \"UpdateSettings\" exceeded 256, did you forget to implement a listener?")
 				end
 				table.insert(Queue.Reliable[0], {Player, Value} :: {any})
+			end
+		elseif Index == 3 then
+			local Value: string = SerdesFunctions.ReadEVENT_UnboxEgg()
+			if Events.Reliable[3] ~= nil then
+				task.spawn(Events.Reliable[3], Player, Value)
+			else
+				if #Queue.Reliable[3] > 256 then
+					warn("[Blink]: Event queue of \"UnboxEgg\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[3], {Player, Value} :: {any})
+			end
+		elseif Index == 5 then
+			local Value: string = SerdesFunctions.ReadEVENT_BuyEggRequest()
+			if Events.Reliable[5] ~= nil then
+				task.spawn(Events.Reliable[5], Player, Value)
+			else
+				if #Queue.Reliable[5] > 256 then
+					warn("[Blink]: Event queue of \"BuyEggRequest\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[5], {Player, Value} :: {any})
+			end
+		elseif Index == 6 then
+			local Value: { eggId: string, amount: number } = SerdesFunctions.ReadEVENT_HatchEggRequest()
+			if Events.Reliable[6] ~= nil then
+				task.spawn(Events.Reliable[6], Player, Value)
+			else
+				if #Queue.Reliable[6] > 256 then
+					warn("[Blink]: Event queue of \"HatchEggRequest\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[6], {Player, Value} :: {any})
+			end
+		elseif Index == 7 then
+			local Value: string = SerdesFunctions.ReadEVENT_EquipPetRequest()
+			if Events.Reliable[7] ~= nil then
+				task.spawn(Events.Reliable[7], Player, Value)
+			else
+				if #Queue.Reliable[7] > 256 then
+					warn("[Blink]: Event queue of \"EquipPetRequest\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[7], {Player, Value} :: {any})
+			end
+		elseif Index == 8 then
+			local Value: string = SerdesFunctions.ReadEVENT_UnequipPetRequest()
+			if Events.Reliable[8] ~= nil then
+				task.spawn(Events.Reliable[8], Player, Value)
+			else
+				if #Queue.Reliable[8] > 256 then
+					warn("[Blink]: Event queue of \"UnequipPetRequest\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[8], {Player, Value} :: {any})
 			end
 		end
 	end
@@ -438,6 +675,168 @@ local Returns = table.freeze({
 		FireExcept = function(Except: Player, Value: string): ()
 			Load()
 			SerdesFunctions.WriteEVENT_SyncRegion(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				if Player == Except then
+					continue
+				end
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+	},
+	UnboxEgg = {
+		On = function(Listener: (Player: Player, Value: string) -> ()): () -> ()
+			Events.Reliable[3] = Listener
+			for Index, Arguments in Queue.Reliable[3] do
+				task.spawn(Listener, table.unpack(Arguments))
+			end
+			Queue.Reliable[3] = {}
+			return function (): ()
+				if Events.Reliable[3] == Listener then
+					Events.Reliable[3] = nil
+				end
+			end
+		end
+	},
+	EggUnboxedResult = {
+		Fire = function(Player: Player, Value: { success: boolean, reason: string?, petUuid: string?, petId: string? }): ()
+			Load(PlayersMap[Player])
+			SerdesFunctions.WriteEVENT_EggUnboxedResult(Value)
+			PlayersMap[Player] = Save()
+		end,
+		FireAll = function(Value: { success: boolean, reason: string?, petUuid: string?, petId: string? }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_EggUnboxedResult(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireList = function(List: {Player}, Value: { success: boolean, reason: string?, petUuid: string?, petId: string? }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_EggUnboxedResult(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in List do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireExcept = function(Except: Player, Value: { success: boolean, reason: string?, petUuid: string?, petId: string? }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_EggUnboxedResult(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				if Player == Except then
+					continue
+				end
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+	},
+	BuyEggRequest = {
+		On = function(Listener: (Player: Player, Value: string) -> ()): () -> ()
+			Events.Reliable[5] = Listener
+			for Index, Arguments in Queue.Reliable[5] do
+				task.spawn(Listener, table.unpack(Arguments))
+			end
+			Queue.Reliable[5] = {}
+			return function (): ()
+				if Events.Reliable[5] == Listener then
+					Events.Reliable[5] = nil
+				end
+			end
+		end
+	},
+	HatchEggRequest = {
+		On = function(Listener: (Player: Player, Value: { eggId: string, amount: number }) -> ()): () -> ()
+			Events.Reliable[6] = Listener
+			for Index, Arguments in Queue.Reliable[6] do
+				task.spawn(Listener, table.unpack(Arguments))
+			end
+			Queue.Reliable[6] = {}
+			return function (): ()
+				if Events.Reliable[6] == Listener then
+					Events.Reliable[6] = nil
+				end
+			end
+		end
+	},
+	EquipPetRequest = {
+		On = function(Listener: (Player: Player, Value: string) -> ()): () -> ()
+			Events.Reliable[7] = Listener
+			for Index, Arguments in Queue.Reliable[7] do
+				task.spawn(Listener, table.unpack(Arguments))
+			end
+			Queue.Reliable[7] = {}
+			return function (): ()
+				if Events.Reliable[7] == Listener then
+					Events.Reliable[7] = nil
+				end
+			end
+		end
+	},
+	UnequipPetRequest = {
+		On = function(Listener: (Player: Player, Value: string) -> ()): () -> ()
+			Events.Reliable[8] = Listener
+			for Index, Arguments in Queue.Reliable[8] do
+				task.spawn(Listener, table.unpack(Arguments))
+			end
+			Queue.Reliable[8] = {}
+			return function (): ()
+				if Events.Reliable[8] == Listener then
+					Events.Reliable[8] = nil
+				end
+			end
+		end
+	},
+	SyncData = {
+		Fire = function(Player: Player, Value: { Coins: number, Inventory: {[string]: { Id: string, Damage: number, Health: number }}, Equipped: {[string]: boolean}, OwnedEggs: {[string]: number}, MaxSlots: number, Settings: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? } }): ()
+			Load(PlayersMap[Player])
+			SerdesFunctions.WriteEVENT_SyncData(Value)
+			PlayersMap[Player] = Save()
+		end,
+		FireAll = function(Value: { Coins: number, Inventory: {[string]: { Id: string, Damage: number, Health: number }}, Equipped: {[string]: boolean}, OwnedEggs: {[string]: number}, MaxSlots: number, Settings: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? } }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_SyncData(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireList = function(List: {Player}, Value: { Coins: number, Inventory: {[string]: { Id: string, Damage: number, Health: number }}, Equipped: {[string]: boolean}, OwnedEggs: {[string]: number}, MaxSlots: number, Settings: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? } }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_SyncData(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in List do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireExcept = function(Except: Player, Value: { Coins: number, Inventory: {[string]: { Id: string, Damage: number, Health: number }}, Equipped: {[string]: boolean}, OwnedEggs: {[string]: number}, MaxSlots: number, Settings: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? } }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_SyncData(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
 			for _, Player in Players:GetPlayers() do
 				if Player == Except then

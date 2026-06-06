@@ -6,7 +6,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ProfileStore = require(ServerScriptService.services.ProfileStore)
 local Types = require(ReplicatedStorage.Shared.Types)
 
--- Moduły wymagane do synchronizacji sieciowej i regionu
+-- DODANE: Moduły wymagane do synchronizacji sieciowej i regionu
 local RegionTracker = require(ServerScriptService.services.RegionTracker)
 local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
 
@@ -14,7 +14,7 @@ local DataManager = {}
 
 local DEFAULT_DATA: Types.ProfileData = {
 	Coins = 0,
-	Pets = {} :: { string },
+	Pets = {},
 	Settings = {
 		FOV = 70,
 		MusicVol = 50,
@@ -23,23 +23,22 @@ local DEFAULT_DATA: Types.ProfileData = {
 	},
 }
 
--- Strongly type activeProfiles using ProfileStore's generic profile structure
-local activeProfiles: { [Player]: ProfileStore.Profile<Types.ProfileData> } = {}
--- Cast to any here to satisfy ProfileStore's strict serializability constraint
-local profileStore: ProfileStore.ProfileStore<Types.ProfileData> = ProfileStore.New("Production_PlayerProfiles_v1", DEFAULT_DATA :: any)
+local activeProfiles: { [Player]: any } = {}
+local profileStore = ProfileStore.New("Production_PlayerProfiles_v1", DEFAULT_DATA)
 
 local function onPlayerAdded(player: Player)
 	local profileKey = "Player_" .. player.UserId
-	local profile = profileStore:StartSessionAsync(profileKey, {})
+	local profile = profileStore:StartSessionAsync(profileKey)
 
 	if profile then
 		if player.Parent then
 			activeProfiles[player] = profile
 
-			-- Synchronizacja sieciowa i regionu przy wejściu gracza (with boundary cast)
-			Blink.SyncSettings.Fire(player, profile.Data.Settings :: any)
+			-- DODANE: Twój blok synchronizacji na wejście (odpala się od razu, bez pętli while!)
+			Blink.SyncSettings.Fire(player, profile.Data.Settings)
 			Blink.SyncRegion.Fire(player, RegionTracker.GetRegion())
 
+			-- POPRAWIONE: Wykorzystujemy właściwy dla Twojej wersji sygnał zakończenia sesji
 			profile.OnSessionEnd:Connect(function()
 				activeProfiles[player] = nil
 				if player:IsDescendantOf(Players) then
@@ -62,16 +61,17 @@ local function onPlayerRemoving(player: Player)
 	end
 end
 
-function DataManager:GetProfile(player: Player): ProfileStore.Profile<Types.ProfileData>?
+function DataManager:GetProfile(player: Player): any
 	return activeProfiles[player]
 end
 
--- Funkcje dla Loader'a
+-- DODANE: Funkcje dla Loader'a
 function DataManager.OnInit()
 	-- Przygotowanie modułu (puste, ale potrzebne dla architektury)
 end
 
 function DataManager.OnStart()
+	-- PRZENIESIONE: Twoje eventy z dołu skryptu do fazy OnStart
 	Players.PlayerAdded:Connect(onPlayerAdded)
 	Players.PlayerRemoving:Connect(onPlayerRemoving)
 
