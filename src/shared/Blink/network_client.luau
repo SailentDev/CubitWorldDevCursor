@@ -162,13 +162,15 @@ local SerdesEvent = "?"
 local SerdesThread: thread?
 Queue.Reliable[1] = table.create(256)
 Queue.Reliable[2] = table.create(256)
-Queue.Reliable[4] = table.create(256)
-Queue.Reliable[9] = table.create(256)
+Queue.Reliable[3] = table.create(256)
+Queue.Reliable[5] = table.create(256)
+Queue.Reliable[6] = table.create(256)
+Queue.Reliable[8] = table.create(256)
 export type SettingsUpdate = { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? }
-export type PetInstance = { Id: string, Damage: number, Health: number }
-export type ProfileData = { Coins: number, Inventory: {[string]: { Id: string, Damage: number, Health: number }}, Equipped: {[string]: boolean}, OwnedEggs: {[string]: number}, MaxSlots: number, Settings: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? } }
-export type EggResult = { success: boolean, reason: string?, petUuid: string?, petId: string? }
-export type HatchEggPayload = { eggId: string, amount: number }
+export type CurrencySyncData = { currencyType: string, value: number }
+export type EggBuyRequest = { eggName: string }
+export type EggHatchedData = { petName: string }
+export type EggSyncData = { eggName: string, amount: number }
 function SerdesFunctions.WriteEVENT_UpdateSettings(Value: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? }): ()
 	-- Allocate BLOCK: 5 bytes
 	local BLOCK_START = Allocate(5)
@@ -234,146 +236,63 @@ function SerdesFunctions.ReadEVENT_SyncRegion(): (string)
 	return Value
 end
 
-function SerdesFunctions.WriteEVENT_UnboxEgg(Value: string): ()
-	-- Allocate BLOCK: 3 bytes
-	local BLOCK_START = Allocate(3)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 3)
-	local Length = #Value
-	buffer.writeu16(SendBuffer, BLOCK_START + 1, Length)
-	Allocate(Length)
-	buffer.writestring(SendBuffer, SendOffset, Value, Length)
-end
-
-function SerdesFunctions.ReadEVENT_EggUnboxedResult(): ({ success: boolean, reason: string?, petUuid: string?, petId: string? })
-	-- Read BLOCK: 4 bytes
-	local BLOCK_START = Read(4)
+function SerdesFunctions.ReadEVENT_SyncCurrency(): ({ currencyType: string, value: number })
+	-- Read BLOCK: 10 bytes
+	local BLOCK_START = Read(10)
 	local Value = {} :: any
-	Value.success = (buffer.readu8(RecieveBuffer, BLOCK_START + 0) == 1)
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 1) == 1 then
-		-- Read BLOCK: 2 bytes
-		local BLOCK_START = Read(2)
-		local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
-		Value.reason = buffer.readstring(RecieveBuffer, Read(Length), Length)
-	end
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 2) == 1 then
-		-- Read BLOCK: 2 bytes
-		local BLOCK_START = Read(2)
-		local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
-		Value.petUuid = buffer.readstring(RecieveBuffer, Read(Length), Length)
-	end
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 3) == 1 then
-		-- Read BLOCK: 2 bytes
-		local BLOCK_START = Read(2)
-		local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
-		Value.petId = buffer.readstring(RecieveBuffer, Read(Length), Length)
-	end
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+	Value.currencyType = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	Value.value = buffer.readf64(RecieveBuffer, BLOCK_START + 2)
 	return Value
 end
 
-function SerdesFunctions.WriteEVENT_BuyEggRequest(Value: string): ()
+function SerdesFunctions.WriteEVENT_RequestBuyEgg(Value: { eggName: string }): ()
 	-- Allocate BLOCK: 3 bytes
 	local BLOCK_START = Allocate(3)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 5)
-	local Length = #Value
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 4)
+	local Length = #Value.eggName
 	buffer.writeu16(SendBuffer, BLOCK_START + 1, Length)
 	Allocate(Length)
-	buffer.writestring(SendBuffer, SendOffset, Value, Length)
+	buffer.writestring(SendBuffer, SendOffset, Value.eggName, Length)
 end
 
-function SerdesFunctions.WriteEVENT_HatchEggRequest(Value: { eggId: string, amount: number }): ()
+function SerdesFunctions.ReadEVENT_EggHatched(): ({ petName: string })
+	-- Read BLOCK: 2 bytes
+	local BLOCK_START = Read(2)
+	local Value = {} :: any
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+	Value.petName = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	return Value
+end
+
+function SerdesFunctions.ReadEVENT_SyncEggs(): ({ eggName: string, amount: number })
+	-- Read BLOCK: 6 bytes
+	local BLOCK_START = Read(6)
+	local Value = {} :: any
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+	Value.eggName = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	Value.amount = buffer.readu32(RecieveBuffer, BLOCK_START + 2)
+	return Value
+end
+
+function SerdesFunctions.WriteEVENT_RequestHatch(Value: { eggName: string, amount: number }): ()
 	-- Allocate BLOCK: 4 bytes
 	local BLOCK_START = Allocate(4)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 6)
-	local Length = #Value.eggId
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 7)
+	local Length = #Value.eggName
 	buffer.writeu16(SendBuffer, BLOCK_START + 1, Length)
 	Allocate(Length)
-	buffer.writestring(SendBuffer, SendOffset, Value.eggId, Length)
+	buffer.writestring(SendBuffer, SendOffset, Value.eggName, Length)
 	buffer.writeu8(SendBuffer, BLOCK_START + 3, Value.amount)
 end
 
-function SerdesFunctions.WriteEVENT_EquipPetRequest(Value: string): ()
-	-- Allocate BLOCK: 3 bytes
-	local BLOCK_START = Allocate(3)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 7)
-	local Length = #Value
-	buffer.writeu16(SendBuffer, BLOCK_START + 1, Length)
-	Allocate(Length)
-	buffer.writestring(SendBuffer, SendOffset, Value, Length)
-end
-
-function SerdesFunctions.WriteEVENT_UnequipPetRequest(Value: string): ()
-	-- Allocate BLOCK: 3 bytes
-	local BLOCK_START = Allocate(3)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 8)
-	local Length = #Value
-	buffer.writeu16(SendBuffer, BLOCK_START + 1, Length)
-	Allocate(Length)
-	buffer.writestring(SendBuffer, SendOffset, Value, Length)
-end
-
-function SerdesFunctions.ReadEVENT_SyncData(): ({ Coins: number, Inventory: {[string]: { Id: string, Damage: number, Health: number }}, Equipped: {[string]: boolean}, OwnedEggs: {[string]: number}, MaxSlots: number, Settings: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? } })
-	-- Read BLOCK: 20 bytes
-	local BLOCK_START = Read(20)
+function SerdesFunctions.ReadEVENT_SyncPets(): ({ petName: string, amount: number })
+	-- Read BLOCK: 4 bytes
+	local BLOCK_START = Read(4)
 	local Value = {} :: any
-	Value.Coins = buffer.readf64(RecieveBuffer, BLOCK_START + 0)
-	Value.Inventory = {}
-	local Elements_1 = buffer.readu16(RecieveBuffer, BLOCK_START + 8)
-	for _ = 1, Elements_1 do
-		local OFFSET_0 = Read(2)
-		local Length = buffer.readu16(RecieveBuffer, OFFSET_0)
-		local Key_1 = buffer.readstring(RecieveBuffer, Read(Length), Length)
-		local Element_1 = {} :: any
-		local OFFSET_1 = Read(2)
-		Length = buffer.readu16(RecieveBuffer, OFFSET_1)
-		Element_1.Id = buffer.readstring(RecieveBuffer, Read(Length), Length)
-		local OFFSET_2 = Read(4)
-		Element_1.Damage = buffer.readf32(RecieveBuffer, OFFSET_2)
-		local OFFSET_3 = Read(4)
-		Element_1.Health = buffer.readf32(RecieveBuffer, OFFSET_3)
-		Value.Inventory[Key_1] = Element_1
-	end
-	Value.Equipped = {}
-	Elements_1 = buffer.readu16(RecieveBuffer, BLOCK_START + 10)
-	for _ = 1, Elements_1 do
-		local OFFSET_0 = Read(2)
-		local Length = buffer.readu16(RecieveBuffer, OFFSET_0)
-		local Key_1 = buffer.readstring(RecieveBuffer, Read(Length), Length)
-		local OFFSET_1 = Read(1)
-		local Element_1 = (buffer.readu8(RecieveBuffer, OFFSET_1) == 1)
-		Value.Equipped[Key_1] = Element_1
-	end
-	Value.OwnedEggs = {}
-	Elements_1 = buffer.readu16(RecieveBuffer, BLOCK_START + 12)
-	for _ = 1, Elements_1 do
-		local OFFSET_0 = Read(2)
-		local Length = buffer.readu16(RecieveBuffer, OFFSET_0)
-		local Key_1 = buffer.readstring(RecieveBuffer, Read(Length), Length)
-		local OFFSET_1 = Read(2)
-		local Element_1 = buffer.readu16(RecieveBuffer, OFFSET_1)
-		Value.OwnedEggs[Key_1] = Element_1
-	end
-	Value.MaxSlots = buffer.readu16(RecieveBuffer, BLOCK_START + 14)
-	Value.Settings = {} :: any
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 16) == 1 then
-		-- Read BLOCK: 1 bytes
-		local BLOCK_START = Read(1)
-		Value.Settings.FOV = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
-	end
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 17) == 1 then
-		-- Read BLOCK: 1 bytes
-		local BLOCK_START = Read(1)
-		Value.Settings.MusicVol = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
-	end
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 18) == 1 then
-		-- Read BLOCK: 1 bytes
-		local BLOCK_START = Read(1)
-		Value.Settings.ShowFPS = (buffer.readu8(RecieveBuffer, BLOCK_START + 0) == 1)
-	end
-	if buffer.readu8(RecieveBuffer, BLOCK_START + 19) == 1 then
-		-- Read BLOCK: 1 bytes
-		local BLOCK_START = Read(1)
-		Value.Settings.GlobalShadows = (buffer.readu8(RecieveBuffer, BLOCK_START + 0) == 1)
-	end
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+	Value.petName = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	Value.amount = buffer.readu16(RecieveBuffer, BLOCK_START + 2)
 	return Value
 end
 
@@ -389,25 +308,22 @@ if not RunService:IsRunning() then
 	SyncRegion = {
 		On = NOOP
 	},
-	UnboxEgg = {
-		Fire = NOOP
-	},
-	EggUnboxedResult = {
+	SyncCurrency = {
 		On = NOOP
 	},
-	BuyEggRequest = {
+	RequestBuyEgg = {
 		Fire = NOOP
 	},
-	HatchEggRequest = {
+	EggHatched = {
+		On = NOOP
+	},
+	SyncEggs = {
+		On = NOOP
+	},
+	RequestHatch = {
 		Fire = NOOP
 	},
-	EquipPetRequest = {
-		Fire = NOOP
-	},
-	UnequipPetRequest = {
-		Fire = NOOP
-	},
-	SyncData = {
+	SyncPets = {
 		On = NOOP
 	},
 	})
@@ -474,26 +390,48 @@ Reliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
 				end
 				table.insert(Queue.Reliable[2], {Value} :: {any})
 			end
-		elseif Index == 4 then
-			local Value: { success: boolean, reason: string?, petUuid: string?, petId: string? } = SerdesFunctions.ReadEVENT_EggUnboxedResult()
-			if Events.Reliable[4] ~= nil then
-				task.spawn(Events.Reliable[4], Value)
+		elseif Index == 3 then
+			local Value: { currencyType: string, value: number } = SerdesFunctions.ReadEVENT_SyncCurrency()
+			if Events.Reliable[3] ~= nil then
+				SerdesEvent = "SyncCurrency"
+				Events.Reliable[3](Value)
 			else
-				if #Queue.Reliable[4] > 256 then
-					warn("[Blink]: Event queue of \"EggUnboxedResult\" exceeded 256, did you forget to implement a listener?")
+				if #Queue.Reliable[3] > 256 then
+					warn("[Blink]: Event queue of \"SyncCurrency\" exceeded 256, did you forget to implement a listener?")
 				end
-				table.insert(Queue.Reliable[4], {Value} :: {any})
+				table.insert(Queue.Reliable[3], {Value} :: {any})
 			end
-		elseif Index == 9 then
-			local Value: { Coins: number, Inventory: {[string]: { Id: string, Damage: number, Health: number }}, Equipped: {[string]: boolean}, OwnedEggs: {[string]: number}, MaxSlots: number, Settings: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? } } = SerdesFunctions.ReadEVENT_SyncData()
-			if Events.Reliable[9] ~= nil then
-				SerdesEvent = "SyncData"
-				Events.Reliable[9](Value)
+		elseif Index == 5 then
+			local Value: { petName: string } = SerdesFunctions.ReadEVENT_EggHatched()
+			if Events.Reliable[5] ~= nil then
+				SerdesEvent = "EggHatched"
+				Events.Reliable[5](Value)
 			else
-				if #Queue.Reliable[9] > 256 then
-					warn("[Blink]: Event queue of \"SyncData\" exceeded 256, did you forget to implement a listener?")
+				if #Queue.Reliable[5] > 256 then
+					warn("[Blink]: Event queue of \"EggHatched\" exceeded 256, did you forget to implement a listener?")
 				end
-				table.insert(Queue.Reliable[9], {Value} :: {any})
+				table.insert(Queue.Reliable[5], {Value} :: {any})
+			end
+		elseif Index == 6 then
+			local Value: { eggName: string, amount: number } = SerdesFunctions.ReadEVENT_SyncEggs()
+			if Events.Reliable[6] ~= nil then
+				SerdesEvent = "SyncEggs"
+				Events.Reliable[6](Value)
+			else
+				if #Queue.Reliable[6] > 256 then
+					warn("[Blink]: Event queue of \"SyncEggs\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[6], {Value} :: {any})
+			end
+		elseif Index == 8 then
+			local Value: { petName: string, amount: number } = SerdesFunctions.ReadEVENT_SyncPets()
+			if Events.Reliable[8] ~= nil then
+				task.spawn(Events.Reliable[8], Value)
+			else
+				if #Queue.Reliable[8] > 256 then
+					warn("[Blink]: Event queue of \"SyncPets\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[8], {Value} :: {any})
 			end
 		end
 	end
@@ -553,55 +491,68 @@ local Returns = table.freeze({
 			end
 		end
 	},
-	UnboxEgg = {
-		Fire = function(Value: string): ()
-			SerdesFunctions.WriteEVENT_UnboxEgg(Value)
-		end
-	},
-	EggUnboxedResult = {
-		On = function(Listener: (Value: { success: boolean, reason: string?, petUuid: string?, petId: string? }) -> ()): () -> ()
-			Events.Reliable[4] = Listener
-			for Index, Arguments in Queue.Reliable[4] do
-				task.spawn(Listener, table.unpack(Arguments))
+	SyncCurrency = {
+		On = function(Listener: (Value: { currencyType: string, value: number }) -> ()): () -> ()
+			Events.Reliable[3] = Listener
+			for Index, Arguments in Queue.Reliable[3] do
+				Listener(table.unpack(Arguments))
 			end
-			Queue.Reliable[4] = {}
+			Queue.Reliable[3] = {}
 			return function (): ()
-				if Events.Reliable[4] == Listener then
-					Events.Reliable[4] = nil
+				if Events.Reliable[3] == Listener then
+					Events.Reliable[3] = nil
 				end
 			end
 		end
 	},
-	BuyEggRequest = {
-		Fire = function(Value: string): ()
-			SerdesFunctions.WriteEVENT_BuyEggRequest(Value)
+	RequestBuyEgg = {
+		Fire = function(Value: { eggName: string }): ()
+			SerdesFunctions.WriteEVENT_RequestBuyEgg(Value)
 		end
 	},
-	HatchEggRequest = {
-		Fire = function(Value: { eggId: string, amount: number }): ()
-			SerdesFunctions.WriteEVENT_HatchEggRequest(Value)
-		end
-	},
-	EquipPetRequest = {
-		Fire = function(Value: string): ()
-			SerdesFunctions.WriteEVENT_EquipPetRequest(Value)
-		end
-	},
-	UnequipPetRequest = {
-		Fire = function(Value: string): ()
-			SerdesFunctions.WriteEVENT_UnequipPetRequest(Value)
-		end
-	},
-	SyncData = {
-		On = function(Listener: (Value: { Coins: number, Inventory: {[string]: { Id: string, Damage: number, Health: number }}, Equipped: {[string]: boolean}, OwnedEggs: {[string]: number}, MaxSlots: number, Settings: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? } }) -> ()): () -> ()
-			Events.Reliable[9] = Listener
-			for Index, Arguments in Queue.Reliable[9] do
+	EggHatched = {
+		On = function(Listener: (Value: { petName: string }) -> ()): () -> ()
+			Events.Reliable[5] = Listener
+			for Index, Arguments in Queue.Reliable[5] do
 				Listener(table.unpack(Arguments))
 			end
-			Queue.Reliable[9] = {}
+			Queue.Reliable[5] = {}
 			return function (): ()
-				if Events.Reliable[9] == Listener then
-					Events.Reliable[9] = nil
+				if Events.Reliable[5] == Listener then
+					Events.Reliable[5] = nil
+				end
+			end
+		end
+	},
+	SyncEggs = {
+		On = function(Listener: (Value: { eggName: string, amount: number }) -> ()): () -> ()
+			Events.Reliable[6] = Listener
+			for Index, Arguments in Queue.Reliable[6] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[6] = {}
+			return function (): ()
+				if Events.Reliable[6] == Listener then
+					Events.Reliable[6] = nil
+				end
+			end
+		end
+	},
+	RequestHatch = {
+		Fire = function(Value: { eggName: string, amount: number }): ()
+			SerdesFunctions.WriteEVENT_RequestHatch(Value)
+		end
+	},
+	SyncPets = {
+		On = function(Listener: (Value: { petName: string, amount: number }) -> ()): () -> ()
+			Events.Reliable[8] = Listener
+			for Index, Arguments in Queue.Reliable[8] do
+				task.spawn(Listener, table.unpack(Arguments))
+			end
+			Queue.Reliable[8] = {}
+			return function (): ()
+				if Events.Reliable[8] == Listener then
+					Events.Reliable[8] = nil
 				end
 			end
 		end

@@ -2,10 +2,10 @@
 local StarterPlayerScripts = script.Parent
 local modulesFolder = StarterPlayerScripts:WaitForChild("modules") :: Folder
 local uiFolder = modulesFolder:WaitForChild("ui") :: Folder
+local inventoryFolder = modulesFolder:WaitForChild("Inventory") :: Folder -- Dodane
 
 local ClientLoader = {}
 
--- NOWY KONTRAKT: Moduły klienta używają teraz OnInit i OnStart zamiast starego init
 type ClientModule = {
 	OnInit: (() -> ())?,
 	OnStart: (() -> ())?,
@@ -16,7 +16,6 @@ function ClientLoader.Boot()
 	local startTime = os.clock()
 	local modulesToLoad: {ModuleScript} = {}
 	
-	-- Słownik przechowujący załadowane moduły i tablica zachowująca kolejność logowania
 	local loadedModules: { [string]: ClientModule } = {}
 	local moduleNamesOrder: {string} = {}
 
@@ -24,7 +23,7 @@ function ClientLoader.Boot()
 	print("[⚡ CLIENT BOOT] Uruchamianie dwufazowego loadera Cubit World...")
 	print("==================================================")
 
-	-- 1. Zbierz moduły bezpośrednio z folderu 'modules' (ignoruje folder controllers)
+	-- 1. Zbierz moduły bezpośrednio z folderu 'modules'
 	for _, child in modulesFolder:GetChildren() do
 		if child:IsA("ModuleScript") then
 			table.insert(modulesToLoad, child)
@@ -37,8 +36,15 @@ function ClientLoader.Boot()
 			table.insert(modulesToLoad, child)
 		end
 	end
+	
+	-- 3. Zbierz moduły z subfolderu 'Inventory' (DODANE)
+	for _, child in inventoryFolder:GetChildren() do
+		if child:IsA("ModuleScript") then
+			table.insert(modulesToLoad, child)
+		end
+	end
 
-	-- 3. Bezpieczne wykonanie require i rejestracja modułów w pamięci
+	-- 4. Bezpieczne wykonanie require i rejestracja
 	for _, moduleScript in modulesToLoad do
 		local requireSuccess, module = pcall(require, moduleScript)
 
@@ -56,7 +62,7 @@ function ClientLoader.Boot()
 	end
 
 	-- ==================================================
-	-- FAZA 1: OnInit (Alokacja, przygotowanie zmiennych i eventów UI)
+	-- FAZA 1: OnInit
 	-- ==================================================
 	print("[🔄 CLIENT PHASE 1] Uruchamianie fazy OnInit...")
 	for _, name in moduleNamesOrder do
@@ -72,24 +78,23 @@ function ClientLoader.Boot()
 	end
 
 	-- ==================================================
-	-- FAZA 2: OnStart (Komunikacja między modułami, Blink, pełna gotowość)
+	-- FAZA 2: OnStart
 	-- ==================================================
 	print("[🔄 CLIENT PHASE 2] Uruchamianie fazy OnStart...")
-for _, name in moduleNamesOrder do
-	local module = loadedModules[name]
-	if type(module.OnStart) == "function" then
-		task.spawn(function()
-			local success, err = pcall(module.OnStart)
-			if success then
-				print(`  ✔️ {name} -> wystartowany (OnStart)`)
-			else
-				warn(`  ❌ [OnStart Error] W module '{name}': {err}`)
-			end
-		end)
+	for _, name in moduleNamesOrder do
+		local module = loadedModules[name]
+		if type(module.OnStart) == "function" then
+			task.spawn(function()
+				local success, err = pcall(module.OnStart)
+				if success then
+					print(`  ✔️ {name} -> wystartowany (OnStart)`)
+				else
+					warn(`  ❌ [OnStart Error] W module '{name}': {err}`)
+				end
+			end)
+		end
 	end
-end
 
-	-- Podsumowanie działania
 	local totalTime = math.round((os.clock() - startTime) * 1000)
 	print("==================================================")
 	print(`[🚀 CLIENT READY] Dwufazowy boot zakończony sukcesem! Czas: {totalTime}ms`)

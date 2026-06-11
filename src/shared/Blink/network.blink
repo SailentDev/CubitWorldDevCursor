@@ -8,34 +8,24 @@ struct SettingsUpdate {
     GlobalShadows: boolean?
 }
 
-struct PetInstance {
-    Id: string,
-    Damage: f32,
-    Health: f32
+struct CurrencySyncData {
+    currencyType: string,
+    value: f64
 }
 
-struct ProfileData {
-    Coins: f64,
-    Inventory: map{[string]: PetInstance},
-    Equipped: map{[string]: boolean},
-    OwnedEggs: map{[string]: u16},
-    MaxSlots: u16,
-    Settings: SettingsUpdate
+struct EggBuyRequest {
+    eggName: string
 }
 
-struct EggResult {
-    success: boolean,
-    reason: string?,
-    petUuid: string?,
-    petId: string?
+struct EggHatchedData {
+    petName: string
 }
 
-struct HatchEggPayload {
-    eggId: string,
-    amount: u8
+struct EggSyncData {
+    eggName: string,
+    amount: u32
 }
 
--- Existing Settings and Region Events
 event UpdateSettings {
     From: Client,
     Type: Reliable,
@@ -57,53 +47,50 @@ event SyncRegion {
     Data: string
 }
 
--- Existing Egg Events
-event UnboxEgg {
-    From: Client,
-    Type: Reliable,
-    Call: SingleAsync,
-    Data: string
-}
-
-event EggUnboxedResult {
-    From: Server,
-    Type: Reliable,
-    Call: SingleAsync,
-    Data: EggResult
-}
-
--- New Explicit Events
-event BuyEggRequest {
-    From: Client,
-    Type: Reliable,
-    Call: SingleAsync,
-    Data: string
-}
-
-event HatchEggRequest {
-    From: Client,
-    Type: Reliable,
-    Call: SingleAsync,
-    Data: HatchEggPayload
-}
-
-event EquipPetRequest {
-    From: Client,
-    Type: Reliable,
-    Call: SingleAsync,
-    Data: string
-}
-
-event UnequipPetRequest {
-    From: Client,
-    Type: Reliable,
-    Call: SingleAsync,
-    Data: string
-}
-
-event SyncData {
+event SyncCurrency {
     From: Server,
     Type: Reliable,
     Call: SingleSync,
-    Data: ProfileData
+    Data: CurrencySyncData
+}
+
+event RequestBuyEgg {
+    From: Client,
+    Type: Reliable,
+    Call: SingleAsync,
+    Data: EggBuyRequest
+}
+
+event EggHatched {
+    From: Server,
+    Type: Reliable,
+    Call: SingleSync,
+    Data: EggHatchedData
+}
+
+event SyncEggs {
+    From: Server,
+    Type: Reliable,
+    Call: SingleSync,
+    Data: EggSyncData
+}
+
+event RequestHatch {
+    From: Client,
+    Type: Reliable,
+    Call: SingleAsync,
+    Data: struct {
+        eggName: string,
+        amount: u8
+    }
+}
+
+event SyncPets {
+    From: Server,
+    Type: Reliable,
+    Call: SingleAsync,
+    Data: struct {
+        petName: string,
+        amount: u16
+    }
 }
