@@ -185,29 +185,36 @@ end
     and applies automated setup behaviors.
 ]=]
 function UIManager.OnInit(): ()
-    -- Locate GUI hierarchies
+    -- Pobieranie głównego HUDu i kontenera przycisków
     local mainHUD = playerGui:WaitForChild("MainHUD") :: ScreenGui
     local buttonsFrame = mainHUD:WaitForChild("Buttons") :: Frame
     
+    -- Referencje do przycisków
     local settingsButton = buttonsFrame:WaitForChild("SettingsButton") :: ImageButton
     local inventoryButton = buttonsFrame:WaitForChild("InventoryButton") :: ImageButton
+    local eggShopButton = buttonsFrame:WaitForChild("EggShopButton") :: ImageButton -- NOWOŚĆ
 
+    -- Referencje do ramion interfejsów (Frames)
     local settingsGui = playerGui:WaitForChild("SettingsGui") :: ScreenGui
     local settingsFrame = settingsGui:WaitForChild("Settings") :: Frame
 
     local inventoryGui = playerGui:WaitForChild("InventoryGui") :: ScreenGui
     local inventoryFrame = inventoryGui:WaitForChild("InventoryFrame") :: Frame
 
-    -- Automatically attach unified button feedback animations to all HUD buttons
+    local eggShopGui = playerGui:WaitForChild("EggShopGui") :: ScreenGui -- NOWOŚĆ
+    local eggShopFrame = eggShopGui:WaitForChild("EggShopFrame") :: Frame -- NOWOŚĆ
+
+    -- Automatyczne przypisanie animacji najechania/kliknięcia (działa też na EggShopButton!)
     for _, child in buttonsFrame:GetChildren() do
         if child:IsA("GuiButton") then
             applyButtonFeedback(child)
         end
     end
 
-    -- Setup centralized toggle behavior for both panels
+    -- Centralna rejestracja paneli do systemu otwierania/zamykania
     registerPanel(settingsButton, settingsFrame)
     registerPanel(inventoryButton, inventoryFrame)
+    registerPanel(eggShopButton, eggShopFrame) -- NOWOŚĆ
 end
 
 -- Bind internal functions to the returned module

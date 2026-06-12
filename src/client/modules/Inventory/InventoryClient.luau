@@ -39,7 +39,9 @@ local Templates = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Templat
 local EggTemplate = Templates:WaitForChild("EggTemplate")
 local PetTemplate = Templates:WaitForChild("PetTemplate") :: Frame
 
+-- Zmienne stanu ekwipunku jajek
 local currentSelectedEgg: string? = nil
+local eggAmounts: { [string]: number } = {} -- NOWOŚĆ: Cache przechowujący aktualną ilość posiadanych jajek
 
 -- ==================== FUNKCJA WYŚWIETLANIA STATYSTYK ====================
 local function updatePetDetails(petId: string, level: number)
@@ -69,10 +71,23 @@ local function updatePetDetails(petId: string, level: number)
 end
 -- ========================================================================
 
+-- ==================== MODYFIKACJA: DYNAMICZNE UKRYWANIE PRZYCISKÓW ====================
 local function openHatchPrompt(eggName: string)
 	currentSelectedEgg = eggName
+	
+	-- Pobieramy aktualną ilość jajek z naszego cache (domyślnie 0 jeśli brak)
+	local currentAmount = eggAmounts[eggName] or 0
+	
+	-- Przycisk staje się widoczny tylko wtedy, gdy gracz posiada odpowiednią lub większą ilość jajek
+	Open1x.Visible = currentAmount >= 1
+	Open2x.Visible = currentAmount >= 2
+	Open5x.Visible = currentAmount >= 5
+	Open10x.Visible = currentAmount >= 10
+	
 	HatchPromptFrame.Visible = true
+	print(string.format("[CLIENT -> UI] Otwarto HatchPrompt dla %s. Posiadana ilość: %d. Dostosowano widoczność przycisków.", eggName, currentAmount))
 end
+-- ======================================================================================
 
 local function closeHatchPrompt()
 	currentSelectedEgg = nil
@@ -119,18 +134,22 @@ function InventoryClient.OnStart()
 
 	CloseButton.MouseButton1Click:Connect(closeHatchPrompt)
 	
-	-- ==================== MODYFIKACJA: SYNCHRONIZACJA I USUWANIE JAJEK ====================
+	-- ==================== SYNCHRONIZACJA, USUWANIE I CACHOWANIE JAJEK ====================
 	Blink.SyncEggs.On(function(data: { eggName: string, amount: number })
 		local existingSlot = InventoryScrollingFrame:FindFirstChild(data.eggName)
 		
-		-- NOWOŚĆ: Jeśli ilość spadła do zera lub mniej, usuwamy kafelek i przerywamy dalsze wykonywanie
+		-- Jeśli ilość spadła do zera lub mniej, czyścimy cache, usuwamy kafelek i kończymy
 		if data.amount <= 0 then
+			eggAmounts[data.eggName] = nil -- Usuwamy z pamięci podręcznej
 			if existingSlot then
 				existingSlot:Destroy()
 				print(string.format("[CLIENT -> INVENTORY] Usunięto kafelek jajka %s z UI (ilość wyniosła 0)", data.eggName))
 			end
 			return
 		end
+		
+		-- Aktualizujemy ilość jajek w pamięci podręcznej klienta
+		eggAmounts[data.eggName] = data.amount
 		
 		if existingSlot then
 			local amountLabel = existingSlot:FindFirstChild("AmmoutLabel") :: TextLabel
@@ -151,7 +170,7 @@ function InventoryClient.OnStart()
 		end
 	end)
 
-	-- ==================== NOWY SYSTEM INSTANCJI PETÓW ====================
+	-- ==================== SYSTEM INSTANCJI PETÓW ====================
 	Blink.SyncPets.On(function(data: { uuid: string, petName: string, level: number, isRemoved: boolean? })
 		print(string.format("[CLIENT -> INVENTORY] Aktualizacja peta: %s, Lvl: %d, UUID: %s", data.petName, data.level, data.uuid))
 		

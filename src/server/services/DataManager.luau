@@ -43,6 +43,14 @@ local function onPlayerAdded(player: Player)
 			Blink.SyncSettings.Fire(player, profile.Data.Settings)
 			Blink.SyncRegion.Fire(player, RegionTracker.GetRegion())
 			
+			-- NOWOŚĆ: Synchronizacja stanu portfela na start, żeby klient od razu widział kasę
+			local startCoins = profile.Data.Coins or 0
+			Blink.SyncCurrency.Fire(player, {
+				currencyType = "Coins",
+				value = startCoins
+			})
+			print(string.format("[DATA -> INITIAL SYNC] Wysłano stan portfela dla %s: Coins x%d", player.Name, startCoins))
+
 			-- Synchronizacja zapisanego ekwipunku jajek po wejściu do gry
 			if profile.Data.Eggs then
 				for eggName, amount in pairs(profile.Data.Eggs) do
