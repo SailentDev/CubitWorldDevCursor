@@ -1,6 +1,7 @@
 --!strict
 local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService") -- Potrzebne do generowania unikalnych UUID
 
 local DataManager = require(ServerScriptService.services.DataManager)
 local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
@@ -13,17 +14,14 @@ local function rollPetFromEgg(eggName: string): string?
 	local eggInfo = EggDatabase.GetEggInfo(eggName)
 	if not eggInfo then return nil end
 
-	-- 1. Obliczamy sumę wszystkich szans (wag)
 	local totalWeight = 0
 	for _, weight in pairs(eggInfo.DropChances) do
 		totalWeight += weight
 	end
 
-	-- 2. Losujemy liczbę od 0 do sumy wag
 	local randomValue = math.random() * totalWeight
 	local currentWeight = 0
 
-	-- 3. Przechodzimy po petach i sprawdzamy, w który przedział wpadł los
 	for petName, weight in pairs(eggInfo.DropChances) do
 		currentWeight += weight
 		if randomValue <= currentWeight then
@@ -41,7 +39,7 @@ end
 function EggService.OnStart()
 	print("[SERVER -> EGG SERVICE] Egg System Ready! (OnStart)")
 	
-	-- ==================== NOWOŚĆ: OBSŁUGA ZAKUPU JAJKA W SKLEPIE ====================
+	-- OBSŁUGA ZAKUPU JAJKA W SKLEPIE
 	Blink.RequestBuyEgg.On(function(player: Player, data: { eggName: string })
 		local eggName = data.eggName
 		print(string.format("[SERVER -> SHOP] Gracz %s żąda zakupu jajka: %s", player.Name, eggName))
@@ -52,22 +50,18 @@ function EggService.OnStart()
 		local eggInfo = EggDatabase.GetEggInfo(eggName)
 		if not eggInfo then return end
 		
-		-- Sprawdzamy czy gracz ma odpowiednią ilość monet
 		if profile.Data.Coins >= eggInfo.Price then
-			-- Pobieramy koszty i dodajemy jajko do profilu
 			profile.Data.Coins -= eggInfo.Price
 			profile.Data.Eggs[eggName] = (profile.Data.Eggs[eggName] or 0) + 1
 			local newEggAmount = profile.Data.Eggs[eggName]
 			
 			print(string.format("[SERVER -> SHOP] Pomyślnie zakupiono %s dla %s. Stan: %dx", eggName, player.Name, newEggAmount))
 			
-			-- 1. Aktualizacja szafki u klienta (struktura jawna w pliku .blink -> wysyłamy tabelę)
 			Blink.SyncEggs.Fire(player, {
 				eggName = eggName,
 				amount = newEggAmount
 			})
 			
-			-- 2. Aktualizacja stanu portfela u klienta
 			Blink.SyncCurrency.Fire(player, {
 				currencyType = eggInfo.CurrencyType,
 				value = profile.Data.Coins
@@ -76,7 +70,6 @@ function EggService.OnStart()
 			warn(string.format("[SERVER -> SHOP] Odmowa! %s ma za mało monet (%d/%d)", player.Name, profile.Data.Coins, eggInfo.Price))
 		end
 	end)
-	-- ===============================================================================
 
 	-- OBSŁUGA OTWIERANIA (HATCH) JAJKA
 	Blink.RequestHatch.On(function(player: Player, data: { eggName: string, amount: number })
@@ -116,17 +109,26 @@ function EggService.OnStart()
 			local rolledPet = rollPetFromEgg(eggName)
 			
 			if rolledPet then
-				profile.Data.Pets[rolledPet] = (profile.Data.Pets[rolledPet] or 0) + 1
-				local totalPetAmount = profile.Data.Pets[rolledPet]
+				-- GENEROWANIE UNIKALNEJ INSTANCJI PETA
+				local petUUID = HttpService:GenerateGUID(false) -- Losowy, unikalny ciąg znaków
 				
-				print(string.format("  -> Wykluwam jajko %d/%d: WYLOSOWANO -> %s!", i, amount, rolledPet))
-				else
-				print("[SERVER -> ERROR] Nie udało się wylosować peta z jajka: " .. eggId) -- Linia 129
-				-- POPRAWKA: Anonimowa struktura inline -> płaskie argumenty alfabetycznie (amount, petName)
-Blink.SyncPets.Fire(player, {
-	petName = rolledPet,
-	amount = totalPetAmount
-})
+				-- Zapisujemy w tabeli profilu jako słownik pod kluczem UUID
+				profile.Data.Pets[petUUID] = {
+					petName = rolledPet,
+					level = 1 -- Każdy nowy pet zaczyna od 1 poziomu
+				}
+				
+				print(string.format("  -> Wykluwam jajko %d/%d: WYLOSOWANO -> %s (UUID: %s)", i, amount, rolledPet, petUUID))
+				
+				-- WYSYŁANIE DO KLIENTA (Kolejność alfabetyczna pól ze względu na Blink)
+				Blink.SyncPets.Fire(player, {
+					isRemoved = false,
+					level = 1,
+					petName = rolledPet,
+					uuid = petUUID
+				})
+			else
+				print("[SERVER -> ERROR] Nie udało się wylosować peta z jajka: " .. eggName)
 			end
 		end
 		

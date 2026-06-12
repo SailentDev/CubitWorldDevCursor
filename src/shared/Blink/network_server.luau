@@ -169,6 +169,7 @@ export type CurrencySyncData = { currencyType: string, value: number }
 export type EggBuyRequest = { eggName: string }
 export type EggHatchedData = { petName: string }
 export type EggSyncData = { eggName: string, amount: number }
+export type PetSyncData = { uuid: string, petName: string, level: number, isRemoved: boolean? }
 function SerdesFunctions.ReadEVENT_UpdateSettings(): ({ FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? })
 	-- Read BLOCK: 4 bytes
 	local BLOCK_START = Read(4)
@@ -287,15 +288,25 @@ function SerdesFunctions.ReadEVENT_RequestHatch(): ({ eggName: string, amount: n
 	return Value
 end
 
-function SerdesFunctions.WriteEVENT_SyncPets(Value: { petName: string, amount: number }): ()
-	-- Allocate BLOCK: 5 bytes
-	local BLOCK_START = Allocate(5)
+function SerdesFunctions.WriteEVENT_SyncPets(Value: { uuid: string, petName: string, level: number, isRemoved: boolean? }): ()
+	-- Allocate BLOCK: 8 bytes
+	local BLOCK_START = Allocate(8)
 	buffer.writeu8(SendBuffer, BLOCK_START + 0, 8)
-	local Length = #Value.petName
+	local Length = #Value.uuid
 	buffer.writeu16(SendBuffer, BLOCK_START + 1, Length)
 	Allocate(Length)
+	buffer.writestring(SendBuffer, SendOffset, Value.uuid, Length)
+	local Length = #Value.petName
+	buffer.writeu16(SendBuffer, BLOCK_START + 3, Length)
+	Allocate(Length)
 	buffer.writestring(SendBuffer, SendOffset, Value.petName, Length)
-	buffer.writeu16(SendBuffer, BLOCK_START + 3, Value.amount)
+	buffer.writeu16(SendBuffer, BLOCK_START + 5, Value.level)
+	buffer.writeu8(SendBuffer, BLOCK_START + 7, Value.isRemoved ~= nil and 1 or 0)
+	if Value.isRemoved ~= nil then
+		-- Allocate BLOCK: 1 bytes
+		local BLOCK_START = Allocate(1)
+		buffer.writeu8(SendBuffer, BLOCK_START + 0, Value.isRemoved and 1 or 0)
+	end
 end
 
 if not RunService:IsRunning() then
@@ -736,12 +747,12 @@ local Returns = table.freeze({
 		end
 	},
 	SyncPets = {
-		Fire = function(Player: Player, Value: { petName: string, amount: number }): ()
+		Fire = function(Player: Player, Value: { uuid: string, petName: string, level: number, isRemoved: boolean? }): ()
 			Load(PlayersMap[Player])
 			SerdesFunctions.WriteEVENT_SyncPets(Value)
 			PlayersMap[Player] = Save()
 		end,
-		FireAll = function(Value: { petName: string, amount: number }): ()
+		FireAll = function(Value: { uuid: string, petName: string, level: number, isRemoved: boolean? }): ()
 			Load()
 			SerdesFunctions.WriteEVENT_SyncPets(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -753,7 +764,7 @@ local Returns = table.freeze({
 				PlayersMap[Player] = Save()
 			end
 		end,
-		FireList = function(List: {Player}, Value: { petName: string, amount: number }): ()
+		FireList = function(List: {Player}, Value: { uuid: string, petName: string, level: number, isRemoved: boolean? }): ()
 			Load()
 			SerdesFunctions.WriteEVENT_SyncPets(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -765,7 +776,7 @@ local Returns = table.freeze({
 				PlayersMap[Player] = Save()
 			end
 		end,
-		FireExcept = function(Except: Player, Value: { petName: string, amount: number }): ()
+		FireExcept = function(Except: Player, Value: { uuid: string, petName: string, level: number, isRemoved: boolean? }): ()
 			Load()
 			SerdesFunctions.WriteEVENT_SyncPets(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances

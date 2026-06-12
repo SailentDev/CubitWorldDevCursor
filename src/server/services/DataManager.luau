@@ -2,10 +2,13 @@
 local Players = game:GetService("Players")
 local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 
 local ProfileStore = require(ServerScriptService.services.ProfileStore)
 local Types = require(ReplicatedStorage.Shared.Types)
 
+-- Import bazy danych petów do weryfikacji nazw
+local PetDatabase = require(ReplicatedStorage.Shared:WaitForChild("PetDatabase") :: ModuleScript)
 local RegionTracker = require(ServerScriptService.services.RegionTracker)
 local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
 
@@ -51,29 +54,63 @@ local function onPlayerAdded(player: Player)
 				end
 			end
 			
-			-- ==================== SYNCHRONIZACJA PETÓW NA WEJŚCIE ====================
-if profile.Data.Pets then
-	for petName, value in pairs(profile.Data.Pets) do
-		-- ZABEZPIECZENIE: Jeśli w bazie siedzą stare testowe dane (tabela zamiast liczby), naprawiamy to w locie
-		local realAmount = 1
-		if type(value) == "number" then
-			realAmount = value
-		elseif type(value) == "table" then
-			realAmount = value.amount or 1
-		end
-
-		-- Wysyłamy poprawną tabelę z kluczami do Blinka
-		Blink.SyncPets.Fire(player, {
-			petName = petName,
-			amount = realAmount
-		})
-		print(string.format("[DATA -> INITIAL SYNC] Wysłano stan peta z bazy dla %s: %s x%d", player.Name, petName, realAmount))
-	end
-end
+			-- ==================== SYNCHRONIZACJA I NAPRAWA UNIKALNYCH PETÓW ====================
+			if profile.Data.Pets then
+				local oldPetsToMigrate = {}
+				
+				-- KROK 1: Wykrywanie starych formatów danych (zapis ilościowy zamiast słownika UUID)
+				for key, value in pairs(profile.Data.Pets) do
+					if type(value) == "number" or (type(value) == "table" and value.petName == nil) then
+						local petName = key
+						local amount = 1
+						if type(value) == "number" then
+							amount = value
+						elseif type(value) == "table" then
+							amount = value.amount or 1
+						end
+						oldPetsToMigrate[petName] = amount
+					end
+				end
+				
+				-- KROK 2: Automatyczna migracja (zamiana starych danych na instancje UUID)
+				for petName, amount in pairs(oldPetsToMigrate) do
+					profile.Data.Pets[petName] = nil 
+					for i = 1, amount do
+						local newUUID = HttpService:GenerateGUID(false)
+						profile.Data.Pets[newUUID] = {
+							petName = petName,
+							level = 1
+						}
+						print(string.format("[DATA -> MIGRATION] Przekonwertowano stary zapis %s na unikalne UUID: %s", petName, newUUID))
+					end
+				end
+				
+				-- KROK 2.5: SYSTEM AUTONAPRAWY SKAŻONYCH DANYCH (Nowość!)
+				-- Jeśli nazwa peta nie istnieje w PetDatabase (bo jest dziwnym ciągiem znaków), naprawiamy ją na "Pyrodon"
+				for petUUID, petData in pairs(profile.Data.Pets) do
+					if type(petData) == "table" and petData.petName then
+						local petInfo = PetDatabase.GetPetInfo(petData.petName)
+						if not petInfo then
+							warn(string.format("[DATA -> SELF HEAL] Wykryto skażoną nazwę peta '%s' pod UUID %s. Przywracanie poprawnej nazwy: 'Pyrodon'!", tostring(petData.petName), petUUID))
+							petData.petName = "Pyrodon" -- Tutaj podstawiamy realną nazwę z Twojej gry
+						end
+					end
+				end
+				
+				-- KROK 3: Prawidłowa wysyłka przefiltrowanych i bezpiecznych petów do klienta
+				for petUUID, petData in pairs(profile.Data.Pets) do
+					Blink.SyncPets.Fire(player, {
+						isRemoved = false,
+						level = petData.level or 1,
+						petName = petData.petName,
+						uuid = petUUID
+					})
+					print(string.format("[DATA -> INITIAL SYNC] Wysłano unikalnego peta dla %s: %s (Lvl %d) | UUID: %s", player.Name, petData.petName, petData.level or 1, petUUID))
+				end
+			end
 			-- ==================================================================================
 			
 			print(string.format("[DATA -> BLINK] Wysłano wszystkie startowe pakiety synchronizacji dla %s", player.Name))
-			-- ====================================================================
 
 			profile.OnSessionEnd:Connect(function()
 				print(string.format("[DATA -> RELEASE] Sesja profilu gracza %s została zakończona przez backend.", player.Name))

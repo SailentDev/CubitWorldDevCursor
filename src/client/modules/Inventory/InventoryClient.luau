@@ -5,9 +5,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- Import widoku sklepu oraz sieci klienta Blink
+-- Importy
 local EggShopView = require(script.Parent.EggShopView)
 local Blink = require(ReplicatedStorage.Shared.Blink.network_client)
+local PetDatabase = require(ReplicatedStorage.Shared:WaitForChild("PetDatabase") :: ModuleScript)
 
 local InventoryClient = {}
 
@@ -16,7 +17,16 @@ local InventoryGui = PlayerGui:WaitForChild("InventoryGui")
 local InventoryFrame = InventoryGui:WaitForChild("InventoryFrame")
 local InventoryScrollingFrame = InventoryFrame:WaitForChild("ScrollingFrame")
 
--- Referencja do okienka wyboru ilości oraz jego dzieci
+-- Referencja do panelu statystyk (DetailsFrame) i jego dzieci
+local DetailsFrame = InventoryFrame:WaitForChild("DetailsFrame") :: Frame
+local PetNameLabel = DetailsFrame:WaitForChild("PetNameLabel") :: TextLabel
+local RarityLabel = DetailsFrame:WaitForChild("RarityLabel") :: TextLabel
+local ElementLabel = DetailsFrame:WaitForChild("ElementLabel") :: TextLabel
+local DamageLabel = DetailsFrame:WaitForChild("DamageLabel") :: TextLabel
+local HealthLabel = DetailsFrame:WaitForChild("HealthLabel") :: TextLabel
+local EquipToggleButton = DetailsFrame:WaitForChild("EquipToggleButton") :: TextButton
+
+-- Referencja do okienka wyboru ilości jajek
 local HatchPromptFrame = InventoryFrame:WaitForChild("HatchPromptFrame") :: Frame
 local CloseButton = HatchPromptFrame:WaitForChild("CloseButton") :: TextButton
 local Open1x = HatchPromptFrame:WaitForChild("Open1x") :: TextButton
@@ -24,22 +34,46 @@ local Open2x = HatchPromptFrame:WaitForChild("Open2x") :: TextButton
 local Open5x = HatchPromptFrame:WaitForChild("Open5x") :: TextButton
 local Open10x = HatchPromptFrame:WaitForChild("Open10x") :: TextButton
 
--- Referencja do szablonów
+-- Szablony
 local Templates = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Templates")
 local EggTemplate = Templates:WaitForChild("EggTemplate")
 local PetTemplate = Templates:WaitForChild("PetTemplate") :: Frame
 
--- Zmienna pomocnicza: przechowuje nazwę jajka, które gracz właśnie kliknął
 local currentSelectedEgg: string? = nil
 
--- Funkcja otwierająca okienko wyboru ilości
+-- ==================== FUNKCJA WYŚWIETLANIA STATYSTYK ====================
+local function updatePetDetails(petId: string, level: number)
+	local petInfo = PetDatabase.GetPetInfo(petId)
+	
+	if not petInfo then
+		warn("[CLIENT -> ERROR] Brak danych w PetDatabase dla ID: " .. petId)
+		return
+	end
+	
+	-- Skalowanie statystyk na podstawie poziomu (+10% za każdy poziom powyżej 1)
+	local levelMultiplier = 1 + (level - 1) * 0.1
+	local currentDamage = math.round(petInfo.BaseDamage * levelMultiplier)
+	local currentHp = math.round(petInfo.BaseHp * levelMultiplier)
+	
+	-- Przypisywanie tekstów do Twoich obiektów w DetailsFrame
+	PetNameLabel.Text = string.format("%s (Lvl %d)", petInfo.Name, level)
+	RarityLabel.Text = "Rarity: " .. petInfo.Rarity
+	ElementLabel.Text = "Element: " .. tostring(petInfo.Element)
+	DamageLabel.Text = "Damage: " .. tostring(currentDamage)
+	HealthLabel.Text = "Health: " .. tostring(currentHp)
+	
+	-- Pokazujemy przycisk Equip/Unequip
+	EquipToggleButton.Visible = true
+	
+	print(string.format("[CLIENT -> UI] Wyświetlono statystyki dla %s na poziomie %d", petId, level))
+end
+-- ========================================================================
+
 local function openHatchPrompt(eggName: string)
 	currentSelectedEgg = eggName
 	HatchPromptFrame.Visible = true
-	print("[CLIENT -> UI] Otwarto prompt ilości dla jajka: " .. eggName)
 end
 
--- Funkcja zamykająca okienko wyboru ilości
 local function closeHatchPrompt()
 	currentSelectedEgg = nil
 	HatchPromptFrame.Visible = false
@@ -48,148 +82,113 @@ end
 function InventoryClient.OnInit()
 	print("[CLIENT -> INVENTORY] Initialization (OnInit)...")
 	local shopGui = PlayerGui:WaitForChild("EggShopGui")
-	
-	print("[CLIENT -> INVENTORY] Pobieranie ramki przewijanej i ładowanie widoku sklepu...")
 	EggShopView.Populate(shopGui.EggShopFrame.ScrollingFrame)
+	
+	-- Ukrywamy domyślny przycisk Equip na starcie, dopóki gracz nic nie kliknie
+	EquipToggleButton.Visible = false
 end
 
 function InventoryClient.OnStart()
 	print("[CLIENT -> INVENTORY] Inventory System Ready! (OnStart)")
 	
-	-- Podłączenie akcji pod przyciski ilościowe z aktywnym przesyłaniem danych przez Blink
+	-- Obsługa przycisków otwierania jajek
 	Open1x.MouseButton1Click:Connect(function()
 		if currentSelectedEgg then
-			print(string.format("[CLIENT -> HATCH] Żądanie otwarcia 1x jajka: %s", currentSelectedEgg))
-			Blink.RequestHatch.Fire({
-				eggName = currentSelectedEgg,
-				amount = 1
-			})
+			Blink.RequestHatch.Fire({ eggName = currentSelectedEgg, amount = 1 })
 			closeHatchPrompt()
 		end
 	end)
-
 	Open2x.MouseButton1Click:Connect(function()
 		if currentSelectedEgg then
-			print(string.format("[CLIENT -> HATCH] Żądanie otwarcia 2x jajka: %s", currentSelectedEgg))
-			Blink.RequestHatch.Fire({
-				eggName = currentSelectedEgg,
-				amount = 2
-			})
+			Blink.RequestHatch.Fire({ eggName = currentSelectedEgg, amount = 2 })
 			closeHatchPrompt()
 		end
 	end)
-
 	Open5x.MouseButton1Click:Connect(function()
 		if currentSelectedEgg then
-			print(string.format("[CLIENT -> HATCH] Żądanie otwarcia 5x jajka: %s", currentSelectedEgg))
-			Blink.RequestHatch.Fire({
-				eggName = currentSelectedEgg,
-				amount = 5
-			})
+			Blink.RequestHatch.Fire({ eggName = currentSelectedEgg, amount = 5 })
 			closeHatchPrompt()
 		end
 	end)
-
 	Open10x.MouseButton1Click:Connect(function()
 		if currentSelectedEgg then
-			print(string.format("[CLIENT -> HATCH] Żądanie otwarcia 10x jajka: %s", currentSelectedEgg))
-			Blink.RequestHatch.Fire({
-				eggName = currentSelectedEgg,
-				amount = 10
-			})
+			Blink.RequestHatch.Fire({ eggName = currentSelectedEgg, amount = 10 })
 			closeHatchPrompt()
 		end
 	end)
 
-	-- Podłączenie przycisku zamknięcia okienka (CloseButton)
 	CloseButton.MouseButton1Click:Connect(closeHatchPrompt)
 	
-	-- Nasłuchiwanie na serwerowe pakiety o zmianie stanu posiadanych jajek (JAJKA ZOSTAJĄ STAKOWANE)
+	-- ==================== MODYFIKACJA: SYNCHRONIZACJA I USUWANIE JAJEK ====================
 	Blink.SyncEggs.On(function(data: { eggName: string, amount: number })
-		print(string.format("[CLIENT -> INVENTORY] Odebrano aktualizację ekwipunku: %s x%d", data.eggName, data.amount))
-		
 		local existingSlot = InventoryScrollingFrame:FindFirstChild(data.eggName)
+		
+		-- NOWOŚĆ: Jeśli ilość spadła do zera lub mniej, usuwamy kafelek i przerywamy dalsze wykonywanie
+		if data.amount <= 0 then
+			if existingSlot then
+				existingSlot:Destroy()
+				print(string.format("[CLIENT -> INVENTORY] Usunięto kafelek jajka %s z UI (ilość wyniosła 0)", data.eggName))
+			end
+			return
+		end
 		
 		if existingSlot then
 			local amountLabel = existingSlot:FindFirstChild("AmmoutLabel") :: TextLabel
-			if amountLabel then
-				amountLabel.Text = tostring(data.amount) .. "x"
-				print(string.format("[CLIENT -> UI] Zaktualizowano ilość dla %s na %dx", data.eggName, data.amount))
-			end
+			if amountLabel then amountLabel.Text = tostring(data.amount) .. "x" end
 		else
 			local newSlot = EggTemplate:Clone() :: Frame
 			newSlot.Name = data.eggName
-			
 			local priceBuyButton = newSlot:FindFirstChild("PriceBuyButton") :: GuiObject
-			if priceBuyButton then
-				priceBuyButton.Visible = false
-			end
-			
+			if priceBuyButton then priceBuyButton.Visible = false end
 			local amountLabel = newSlot:FindFirstChild("AmmoutLabel") :: TextLabel
-			if amountLabel then
-				amountLabel.Text = tostring(data.amount) .. "x"
-			end
+			if amountLabel then amountLabel.Text = tostring(data.amount) .. "x" end
 			
 			local eggIcon = newSlot:FindFirstChild("EggIcon") :: ImageButton
 			if eggIcon then
-				eggIcon.MouseButton1Click:Connect(function()
-					openHatchPrompt(data.eggName)
-				end)
-			else
-				warn("[CLIENT -> ERROR] Nie znaleziono elementu EggIcon w szablonie dla " .. data.eggName)
+				eggIcon.MouseButton1Click:Connect(function() openHatchPrompt(data.eggName) end)
 			end
-			
 			newSlot.Parent = InventoryScrollingFrame
-			print("[CLIENT -> UI] Utworzono nowy slot ekwipunku dla jajka: " .. data.eggName)
 		end
 	end)
 
-	-- ==================== NOWA LOGIKA: PETY KAZDY OSOBNO (UNSTAKED) ====================
-	Blink.SyncPets.On(function(data: { petName: string, amount: number })
-		print(string.format("[CLIENT -> INVENTORY] Synchronicacja petów dla %s. Oczekiwana ilość w UI: %d", data.petName, data.amount))
+	-- ==================== NOWY SYSTEM INSTANCJI PETÓW ====================
+	Blink.SyncPets.On(function(data: { uuid: string, petName: string, level: number, isRemoved: boolean? })
+		print(string.format("[CLIENT -> INVENTORY] Aktualizacja peta: %s, Lvl: %d, UUID: %s", data.petName, data.level, data.uuid))
 		
-		-- 1. Znajdujemy i zliczamy wszystkie istniejące już kafelki tego konkretnego peta
-		local existingPetSlots = {}
-		for _, child in ipairs(InventoryScrollingFrame:GetChildren()) do
-			if child.Name == data.petName and child:IsA("Frame") then
-				table.insert(existingPetSlots, child)
-			end
+		local existingSlot = InventoryScrollingFrame:FindFirstChild(data.uuid)
+		
+		if data.isRemoved then
+			if existingSlot then existingSlot:Destroy() end
+			return
 		end
 		
-		local currentCount = #existingPetSlots
-		
-		-- 2. Jeśli w UI jest MNIEJ kafelków niż podaje serwer -> klonujemy brakujące
-		if currentCount < data.amount then
-			local toCreate = data.amount - currentCount
-			for i = 1, toCreate do
-				local newSlot = PetTemplate:Clone() :: Frame
-				newSlot.Name = data.petName
-				
-				-- Ponieważ pety są osobno, tekst "1x/6x" jest zbędny. Ukrywamy licznik ilości.
-				local amountLabel = newSlot:FindFirstChild("AmmoutLabel") or newSlot:FindFirstChild("AmountLabel") :: TextLabel?
-				if amountLabel then
-					amountLabel.Visible = false
-				end
-				
-				-- Tutaj w przyszłości dodasz logikę kliknięcia na dany slot (np. zakłądanie peta)
-				
-				newSlot.Parent = InventoryScrollingFrame
-				print(string.format("[CLIENT -> UI] Utworzono OSOBNY kafelek dla peta: %s", data.petName))
+		if existingSlot then
+			existingSlot:SetAttribute("Level", data.level)
+		else
+			local newSlot = PetTemplate:Clone() :: Frame
+			newSlot.Name = data.uuid 
+			newSlot:SetAttribute("PetId", data.petName)
+			newSlot:SetAttribute("Level", data.level)
+			
+			local amountLabel = newSlot:FindFirstChild("AmmoutLabel") or newSlot:FindFirstChild("AmountLabel") :: TextLabel?
+			if amountLabel then amountLabel.Visible = false end
+			
+			local petIcon = newSlot:FindFirstChild("PetIcon") :: ImageButton
+			if petIcon then
+				petIcon.MouseButton1Click:Connect(function()
+					local currentLevel = newSlot:GetAttribute("Level") or 1
+					local currentName = newSlot:GetAttribute("PetId") or data.petName
+					
+					updatePetDetails(currentName, currentLevel)
+					DetailsFrame:SetAttribute("SelectedPetUUID", data.uuid)
+				end)
+			else
+				warn("[CLIENT -> ERROR] Nie znaleziono PetIcon w szablonie peta!")
 			end
 			
-		-- 3. Jeśli w UI jest WIĘCEJ kafelków niż podaje serwer (np. gdybyś kiedyś usunął/sprzedał peta) -> usuwamy nadmiar
-		elseif currentCount > data.amount then
-			local toDestroy = currentCount - data.amount
-			for i = 1, toDestroy do
-				local slotToRemove = existingPetSlots[#existingPetSlots]
-				if slotToRemove then
-					slotToRemove:Destroy()
-					table.remove(existingPetSlots, #existingPetSlots)
-				end
-			end
+			newSlot.Parent = InventoryScrollingFrame
 		end
 	end)
-	-- ==================================================================================
 end
 
 return InventoryClient

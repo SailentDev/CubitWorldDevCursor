@@ -171,6 +171,7 @@ export type CurrencySyncData = { currencyType: string, value: number }
 export type EggBuyRequest = { eggName: string }
 export type EggHatchedData = { petName: string }
 export type EggSyncData = { eggName: string, amount: number }
+export type PetSyncData = { uuid: string, petName: string, level: number, isRemoved: boolean? }
 function SerdesFunctions.WriteEVENT_UpdateSettings(Value: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? }): ()
 	-- Allocate BLOCK: 5 bytes
 	local BLOCK_START = Allocate(5)
@@ -286,13 +287,20 @@ function SerdesFunctions.WriteEVENT_RequestHatch(Value: { eggName: string, amoun
 	buffer.writeu8(SendBuffer, BLOCK_START + 3, Value.amount)
 end
 
-function SerdesFunctions.ReadEVENT_SyncPets(): ({ petName: string, amount: number })
-	-- Read BLOCK: 4 bytes
-	local BLOCK_START = Read(4)
+function SerdesFunctions.ReadEVENT_SyncPets(): ({ uuid: string, petName: string, level: number, isRemoved: boolean? })
+	-- Read BLOCK: 7 bytes
+	local BLOCK_START = Read(7)
 	local Value = {} :: any
 	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 0)
+	Value.uuid = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	Length = buffer.readu16(RecieveBuffer, BLOCK_START + 2)
 	Value.petName = buffer.readstring(RecieveBuffer, Read(Length), Length)
-	Value.amount = buffer.readu16(RecieveBuffer, BLOCK_START + 2)
+	Value.level = buffer.readu16(RecieveBuffer, BLOCK_START + 4)
+	if buffer.readu8(RecieveBuffer, BLOCK_START + 6) == 1 then
+		-- Read BLOCK: 1 bytes
+		local BLOCK_START = Read(1)
+		Value.isRemoved = (buffer.readu8(RecieveBuffer, BLOCK_START + 0) == 1)
+	end
 	return Value
 end
 
@@ -424,7 +432,7 @@ Reliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
 				table.insert(Queue.Reliable[6], {Value} :: {any})
 			end
 		elseif Index == 8 then
-			local Value: { petName: string, amount: number } = SerdesFunctions.ReadEVENT_SyncPets()
+			local Value: { uuid: string, petName: string, level: number, isRemoved: boolean? } = SerdesFunctions.ReadEVENT_SyncPets()
 			if Events.Reliable[8] ~= nil then
 				task.spawn(Events.Reliable[8], Value)
 			else
@@ -544,7 +552,7 @@ local Returns = table.freeze({
 		end
 	},
 	SyncPets = {
-		On = function(Listener: (Value: { petName: string, amount: number }) -> ()): () -> ()
+		On = function(Listener: (Value: { uuid: string, petName: string, level: number, isRemoved: boolean? }) -> ()): () -> ()
 			Events.Reliable[8] = Listener
 			for Index, Arguments in Queue.Reliable[8] do
 				task.spawn(Listener, table.unpack(Arguments))

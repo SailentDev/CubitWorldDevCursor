@@ -85,12 +85,16 @@ event RequestHatch {
     }
 }
 
+struct PetSyncData {
+    uuid: string,
+    petName: string,
+    level: u16,
+    isRemoved: boolean?
+}
+
 event SyncPets {
     From: Server,
     Type: Reliable,
     Call: SingleAsync,
-    Data: struct {
-        petName: string,
-        amount: u16
-    }
+    Data: PetSyncData
 }
