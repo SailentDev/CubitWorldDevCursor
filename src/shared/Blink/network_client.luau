@@ -166,12 +166,14 @@ Queue.Reliable[3] = table.create(256)
 Queue.Reliable[5] = table.create(256)
 Queue.Reliable[6] = table.create(256)
 Queue.Reliable[8] = table.create(256)
+Queue.Reliable[10] = table.create(256)
 export type SettingsUpdate = { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? }
 export type CurrencySyncData = { currencyType: string, value: number }
 export type EggBuyRequest = { eggName: string }
 export type EggHatchedData = { petName: string }
 export type EggSyncData = { eggName: string, amount: number }
 export type PetSyncData = { uuid: string, petName: string, level: number, isRemoved: boolean? }
+export type EquippedPetInfo = { uuid: string, petName: string }
 function SerdesFunctions.WriteEVENT_UpdateSettings(Value: { FOV: number?, MusicVol: number?, ShowFPS: boolean?, GlobalShadows: boolean? }): ()
 	-- Allocate BLOCK: 5 bytes
 	local BLOCK_START = Allocate(5)
@@ -304,6 +306,40 @@ function SerdesFunctions.ReadEVENT_SyncPets(): ({ uuid: string, petName: string,
 	return Value
 end
 
+function SerdesFunctions.WriteEVENT_RequestEquip(Value: { uuid: string }): ()
+	-- Allocate BLOCK: 3 bytes
+	local BLOCK_START = Allocate(3)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 9)
+	local Length = #Value.uuid
+	buffer.writeu16(SendBuffer, BLOCK_START + 1, Length)
+	Allocate(Length)
+	buffer.writestring(SendBuffer, SendOffset, Value.uuid, Length)
+end
+
+function SerdesFunctions.ReadEVENT_SyncEquippedPets(): ({ userId: number, equippedUUIDs: { string } })
+	-- Read BLOCK: 10 bytes
+	local BLOCK_START = Read(10)
+	local Value = {} :: any
+	Value.userId = buffer.readf64(RecieveBuffer, BLOCK_START + 0)
+	-- START ARRAY
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 8)
+	if Length < 0 then error(`Expected "Length" to be larger than 0, got {Length} instead.`) end
+	if Length > 65535 then error(`Expected "Length" to be smaller than 65535, got {Length} instead.`) end
+	Value.equippedUUIDs = table.create(Length)
+		-- Read BLOCK: 2 bytes
+	local ARRAY_START_1 = Read(2 * Length)
+	for Index = 1, Length do
+		-- Read 2
+		local OPERATION_OFFSET_0 = ARRAY_START_1
+		ARRAY_START_1 += 2
+		Length = buffer.readu16(RecieveBuffer, OPERATION_OFFSET_0)
+		local Item_1 = buffer.readstring(RecieveBuffer, Read(Length), Length)
+		table.insert(Value.equippedUUIDs, Item_1)
+	end
+	-- END ARRAY
+	return Value
+end
+
 if not RunService:IsRunning() then
 	local NOOP = function() end
 	local Returns = table.freeze({
@@ -332,6 +368,12 @@ if not RunService:IsRunning() then
 		Fire = NOOP
 	},
 	SyncPets = {
+		On = NOOP
+	},
+	RequestEquip = {
+		Fire = NOOP
+	},
+	SyncEquippedPets = {
 		On = NOOP
 	},
 	})
@@ -440,6 +482,17 @@ Reliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
 					warn("[Blink]: Event queue of \"SyncPets\" exceeded 256, did you forget to implement a listener?")
 				end
 				table.insert(Queue.Reliable[8], {Value} :: {any})
+			end
+		elseif Index == 10 then
+			local Value: { userId: number, equippedUUIDs: { string } } = SerdesFunctions.ReadEVENT_SyncEquippedPets()
+			if Events.Reliable[10] ~= nil then
+				SerdesEvent = "SyncEquippedPets"
+				Events.Reliable[10](Value)
+			else
+				if #Queue.Reliable[10] > 256 then
+					warn("[Blink]: Event queue of \"SyncEquippedPets\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[10], {Value} :: {any})
 			end
 		end
 	end
@@ -561,6 +614,25 @@ local Returns = table.freeze({
 			return function (): ()
 				if Events.Reliable[8] == Listener then
 					Events.Reliable[8] = nil
+				end
+			end
+		end
+	},
+	RequestEquip = {
+		Fire = function(Value: { uuid: string }): ()
+			SerdesFunctions.WriteEVENT_RequestEquip(Value)
+		end
+	},
+	SyncEquippedPets = {
+		On = function(Listener: (Value: { userId: number, equippedUUIDs: { string } }) -> ()): () -> ()
+			Events.Reliable[10] = Listener
+			for Index, Arguments in Queue.Reliable[10] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[10] = {}
+			return function (): ()
+				if Events.Reliable[10] == Listener then
+					Events.Reliable[10] = nil
 				end
 			end
 		end

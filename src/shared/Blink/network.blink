@@ -98,3 +98,27 @@ event SyncPets {
     Call: SingleAsync,
     Data: PetSyncData
 }
+
+event RequestEquip {
+    From: Client,
+    Type: Reliable,
+    Call: SingleSync,
+    Data: struct {
+        uuid: string
+    }
+}
+
+struct EquippedPetInfo {
+    uuid: string,
+    petName: string
+}
+
+event SyncEquippedPets {
+    From: Server,
+    Type: Reliable,
+    Call: SingleSync,
+    Data: struct {
+        userId: f64,
+        equippedUUIDs: string[]
+    }
+}

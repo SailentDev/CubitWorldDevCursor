@@ -7,7 +7,6 @@ local HttpService = game:GetService("HttpService")
 local ProfileStore = require(ServerScriptService.services.ProfileStore)
 local Types = require(ReplicatedStorage.Shared.Types)
 
--- Import bazy danych petów do weryfikacji nazw
 local PetDatabase = require(ReplicatedStorage.Shared:WaitForChild("PetDatabase") :: ModuleScript)
 local RegionTracker = require(ServerScriptService.services.RegionTracker)
 local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
@@ -29,6 +28,57 @@ local DEFAULT_DATA: Types.ProfileData = {
 local activeProfiles: { [Player]: any } = {}
 local profileStore = ProfileStore.New("Production_PlayerProfiles_v99999", DEFAULT_DATA)
 
+-- ==================== BEZPIECZNA SYNCHRONIZACJA NA ŻĄDANIE KLIENTA ====================
+function DataManager:SyncPlayerData(player: Player)
+	local profile = activeProfiles[player]
+	if not profile then return end
+
+	print(string.format("[DATA -> SYNC] Klient %s jest gotowy. Wysyłam pakiety danych...", player.Name))
+
+	-- Podstawowe systemy
+	Blink.SyncSettings.Fire(player, profile.Data.Settings)
+	Blink.SyncRegion.Fire(player, RegionTracker.GetRegion())
+	
+	-- Portfel
+	local startCoins = profile.Data.Coins or 0
+	Blink.SyncCurrency.Fire(player, {
+		currencyType = "Coins",
+		value = startCoins
+	})
+
+	-- Jajka
+	if profile.Data.Eggs then
+		for eggName, amount in pairs(profile.Data.Eggs) do
+			Blink.SyncEggs.Fire(player, {
+				eggName = eggName,
+				amount = amount
+			})
+		end
+	end
+	
+	-- Pety (Ekwipunek)
+	if profile.Data.Pets then
+		for petUUID, petData in pairs(profile.Data.Pets) do
+			Blink.SyncPets.Fire(player, {
+				isRemoved = false,
+				level = petData.level or 1,
+				petName = petData.petName,
+				uuid = petUUID
+			})
+		end
+	end
+
+	-- NAPRAWIONE: Wysyłamy oryginalną listę UUID bezpośrednio do klientów, bez zamiany na nazwy tekstowe!
+	if profile.Data.EquippedPets then
+		Blink.SyncEquippedPets.FireAll({
+			userId = player.UserId,
+			equippedUUIDs = profile.Data.EquippedPets
+		})
+	end
+	
+	print(string.format("[DATA -> SYNC SUCCESS] Zsynchronizowano pomyślnie gracza %s", player.Name))
+end
+
 local function onPlayerAdded(player: Player)
 	print(string.format("[DATA -> SESSION] Gracz %s dołączył. Rozpoczynam wczytywanie profilu...", player.Name))
 	local profileKey = "Player_" .. player.UserId
@@ -39,34 +89,10 @@ local function onPlayerAdded(player: Player)
 			activeProfiles[player] = profile
 			print(string.format("[DATA -> SUCCESS] Profil gracza %s załadowany pomyślnie!", player.Name))
 
-			-- ==================== SYNCHRONIZACJA NA WEJŚCIE ====================
-			Blink.SyncSettings.Fire(player, profile.Data.Settings)
-			Blink.SyncRegion.Fire(player, RegionTracker.GetRegion())
-			
-			-- NOWOŚĆ: Synchronizacja stanu portfela na start, żeby klient od razu widział kasę
-			local startCoins = profile.Data.Coins or 0
-			Blink.SyncCurrency.Fire(player, {
-				currencyType = "Coins",
-				value = startCoins
-			})
-			print(string.format("[DATA -> INITIAL SYNC] Wysłano stan portfela dla %s: Coins x%d", player.Name, startCoins))
-
-			-- Synchronizacja zapisanego ekwipunku jajek po wejściu do gry
-			if profile.Data.Eggs then
-				for eggName, amount in pairs(profile.Data.Eggs) do
-					Blink.SyncEggs.Fire(player, {
-						eggName = eggName,
-						amount = amount
-					})
-					print(string.format("[DATA -> INITIAL SYNC] Wysłano stan jajka z bazy dla %s: %s x%d", player.Name, eggName, amount))
-				end
-			end
-			
-			-- ==================== SYNCHRONIZACJA I NAPRAWA UNIKALNYCH PETÓW ====================
+			-- ==================== MIGROWANIE I NAPRAWA DANYCH (TYLKO NA SERWERZE) ====================
 			if profile.Data.Pets then
 				local oldPetsToMigrate = {}
 				
-				-- KROK 1: Wykrywanie starych formatów danych (zapis ilościowy zamiast słownika UUID)
 				for key, value in pairs(profile.Data.Pets) do
 					if type(value) == "number" or (type(value) == "table" and value.petName == nil) then
 						local petName = key
@@ -80,7 +106,6 @@ local function onPlayerAdded(player: Player)
 					end
 				end
 				
-				-- KROK 2: Automatyczna migracja (zamiana starych danych na instancje UUID)
 				for petName, amount in pairs(oldPetsToMigrate) do
 					profile.Data.Pets[petName] = nil 
 					for i = 1, amount do
@@ -89,56 +114,36 @@ local function onPlayerAdded(player: Player)
 							petName = petName,
 							level = 1
 						}
-						print(string.format("[DATA -> MIGRATION] Przekonwertowano stary zapis %s na unikalne UUID: %s", petName, newUUID))
 					end
 				end
 				
-				-- KROK 2.5: SYSTEM AUTONAPRAWY SKAŻONYCH DANYCH (Nowość!)
-				-- Jeśli nazwa peta nie istnieje w PetDatabase (bo jest dziwnym ciągiem znaków), naprawiamy ją na "Pyrodon"
 				for petUUID, petData in pairs(profile.Data.Pets) do
 					if type(petData) == "table" and petData.petName then
 						local petInfo = PetDatabase.GetPetInfo(petData.petName)
 						if not petInfo then
-							warn(string.format("[DATA -> SELF HEAL] Wykryto skażoną nazwę peta '%s' pod UUID %s. Przywracanie poprawnej nazwy: 'Pyrodon'!", tostring(petData.petName), petUUID))
-							petData.petName = "Pyrodon" -- Tutaj podstawiamy realną nazwę z Twojej gry
+							petData.petName = "Pyrodon"
 						end
 					end
 				end
-				
-				-- KROK 3: Prawidłowa wysyłka przefiltrowanych i bezpiecznych petów do klienta
-				for petUUID, petData in pairs(profile.Data.Pets) do
-					Blink.SyncPets.Fire(player, {
-						isRemoved = false,
-						level = petData.level or 1,
-						petName = petData.petName,
-						uuid = petUUID
-					})
-					print(string.format("[DATA -> INITIAL SYNC] Wysłano unikalnego peta dla %s: %s (Lvl %d) | UUID: %s", player.Name, petData.petName, petData.level or 1, petUUID))
-				end
 			end
 			-- ==================================================================================
-			
-			print(string.format("[DATA -> BLINK] Wysłano wszystkie startowe pakiety synchronizacji dla %s", player.Name))
 
 			profile.OnSessionEnd:Connect(function()
-				print(string.format("[DATA -> RELEASE] Sesja profilu gracza %s została zakończona przez backend.", player.Name))
+				print(string.format("[DATA -> RELEASE] Sesja profilu gracza %s została zakończona.", player.Name))
 				activeProfiles[player] = nil
 				if player:IsDescendantOf(Players) then
 					player:Kick("Your data profile session has been released on the backend.")
 				end
 			end)
 		else
-			print(string.format("[DATA -> ABORT] Gracz %s wyszedł zanim profil się załadował. Zamykam sesję.", player.Name))
 			profile:EndSession() 
 		end
 	else
-		warn(string.format("[DATA -> CRITICAL] Błąd krytyczny! Nie udało się załadować profilu dla %s", player.Name))
 		player:Kick("Failed to initialize profile data session.")
 	end
 end
 
 local function onPlayerRemoving(player: Player)
-	print(string.format("[DATA -> REMOVING] Gracz %s opuszcza grę. Zapisuję i zamykam sesję...", player.Name))
 	local profile = activeProfiles[player]
 	if profile then
 		activeProfiles[player] = nil
@@ -156,23 +161,32 @@ function DataManager.OnInit()
 end
 
 function DataManager.OnStart()
-	print("[DATA] DataManager.OnStart podłącza eventy graczy.")
 	Players.PlayerAdded:Connect(onPlayerAdded)
 	Players.PlayerRemoving:Connect(onPlayerRemoving)
+
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = "RequestInitialSync"
+	remote.Parent = ReplicatedStorage
+
+	remote.OnServerEvent:Connect(function(player)
+		local timeout = 5
+		local startTime = os.clock()
+		while not DataManager:GetProfile(player) and player.Parent and (os.clock() - startTime) < timeout do
+			task.wait(0.1)
+		end
+		DataManager:SyncPlayerData(player)
+	end)
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		task.spawn(onPlayerAdded, player)
 	end
 
 	game:BindToClose(function()
-		print("[DATA -> SHUTDOWN] Wykryto zamknięcie serwera! Zamykanie wszystkich aktywnych sesji...")
 		for player, profile in pairs(activeProfiles) do
 			task.spawn(function()
-				print("[DATA -> SHUTDOWN] Zamykanie profilu dla " .. player.Name)
 				profile:EndSession()
 			end)
 		end
-		print("[DATA -> SHUTDOWN] Zakończono pętlę awaryjną wyłączania serwera.")
 	end)
 end
 
