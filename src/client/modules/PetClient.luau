@@ -12,10 +12,9 @@ local ANIM_IDS = {
 	Walk = "rbxassetid://0000000001",
 }
 
+-- Ustawienie pojedynczego slotu idealnie za i lekko z boku postaci
 local SLOT_OFFSETS = {
-	Vector3.new(-2, 0, -2.5),
-	Vector3.new( 0, 0, -3),  
-	Vector3.new( 2, 0, -2.5),
+	Vector3.new(2, 0, -2),  
 }
 
 type PlayerPetData = {
@@ -27,7 +26,6 @@ type PlayerPetData = {
 local playerData: { [Player]: PlayerPetData } = {}
 local petAnimations: { [Model]: { idleTrack: AnimationTrack?, walkTrack: AnimationTrack? } } = {}
 
--- Słownik wiążący UUID z nazwą modelu zasobu
 local uuidToPetName: { [string]: string } = {}
 
 local PetClient = {}
@@ -203,7 +201,6 @@ local function onHeartbeat(dt: number)
 			local newCF = currentCF:Lerp(desiredCF, 1 - math.exp(-10 * dt))
 			model:PivotTo(newCF)
 
-			-- Bezpieczne pobieranie animacji z tabeli, a nie z Instancji modelu
 			local anims = petAnimations[model]
 			local idleTrack = anims and anims.idleTrack
 			local walkTrack = anims and anims.walkTrack

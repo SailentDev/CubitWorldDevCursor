@@ -7,11 +7,11 @@ local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
 local DataManager = require(script.Parent.DataManager)
 local PetDatabase = require(ReplicatedStorage.Shared:WaitForChild("PetDatabase") :: ModuleScript)
 
-local MAX_EQUIPPED_PETS = 3
+-- Zmieniono limit na 1
+local MAX_EQUIPPED_PETS = 1
 
 local PetService = {}
 
--- Funkcja pomocnicza do bezpiecznej replikacji modelu do ReplicatedStorage
 local function przekazModelDoReplicatedStorage(petName: string)
 	local sharedAssets = ReplicatedStorage.Shared:WaitForChild("Assets") :: Folder
 	local replicatedFolder = sharedAssets:FindFirstChild("Pets") :: Folder
@@ -51,32 +51,39 @@ function PetService.OnStart()
 
 		local uuid = data.uuid
 		local petData = profile.Data.Pets[uuid]
-		if not petData then return end
+		
+		-- ANTY-CHEAT ZABEZPIECZENIE: Jeśli gracz nie posiada peta o takim UUID w bazie, przerywamy!
+		if not petData then 
+			warn(string.format("[PetService -> ANTY-CHEAT] Gracz %s próbował założyć nieposiadanego peta!", player.Name))
+			return 
+		end
 
 		local equippedList: { string } = profile.Data.EquippedPets
 		local foundIndex = table.find(equippedList, uuid)
 
 		if foundIndex then
-			-- Zdejmowanie peta
+			-- Jeśli gracz kliknął peta, którego JUŻ MA załozonego -> zdejmij go
 			table.remove(equippedList, foundIndex)
 			print("[PetService] Zdjęto peta o UUID:", uuid)
 		else
-			-- Zakładanie peta
-			if #equippedList >= MAX_EQUIPPED_PETS then return end
+			-- AUTOMATYCZNA PODMIANA & ANTY-CHEAT: 
+			-- Czyszczenie całej tablicy gwarantuje, że stary pet zostanie automatycznie zdjęty,
+			-- a cheater nie będzie w stanie ominąć limitu poprzez spamowanie pakietami.
+			table.clear(equippedList)
 			table.insert(equippedList, uuid)
+			print("[PetService] Założono nowy pet o UUID:", uuid, "oraz automatycznie zdjęto poprzedni.")
 
 			-- Replikacja modelu na żądanie przy założeniu
 			przekazModelDoReplicatedStorage(petData.petName)
 		end
 
-		-- POPRAWKA: Wysyłamy oryginalną listę UUID do klientów, a nie nazwy!
+		-- Wysłanie aktualnej listy (zawsze max 1 pet) do wszystkich klientów
 		Blink.SyncEquippedPets.FireAll({
 			userId = player.UserId,
 			equippedUUIDs = equippedList, 
 		})
 	end)
 
-	-- Replikacja modeli przy wejściu gracza, aby zapobiec Timeoutom na starcie
 	local function onPlayerAdded(player: Player)
 		task.spawn(function()
 			local profile = nil
