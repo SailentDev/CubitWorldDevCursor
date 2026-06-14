@@ -316,7 +316,7 @@ function SerdesFunctions.WriteEVENT_RequestEquip(Value: { uuid: string }): ()
 	buffer.writestring(SendBuffer, SendOffset, Value.uuid, Length)
 end
 
-function SerdesFunctions.ReadEVENT_SyncEquippedPets(): ({ userId: number, equippedUUIDs: { string } })
+function SerdesFunctions.ReadEVENT_SyncEquippedPets(): ({ userId: number, equippedPets: { { uuid: string, petName: string } } })
 	-- Read BLOCK: 10 bytes
 	local BLOCK_START = Read(10)
 	local Value = {} :: any
@@ -325,16 +325,22 @@ function SerdesFunctions.ReadEVENT_SyncEquippedPets(): ({ userId: number, equipp
 	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 8)
 	if Length < 0 then error(`Expected "Length" to be larger than 0, got {Length} instead.`) end
 	if Length > 65535 then error(`Expected "Length" to be smaller than 65535, got {Length} instead.`) end
-	Value.equippedUUIDs = table.create(Length)
-		-- Read BLOCK: 2 bytes
-	local ARRAY_START_1 = Read(2 * Length)
+	Value.equippedPets = table.create(Length)
+		-- Read BLOCK: 4 bytes
+	local ARRAY_START_1 = Read(4 * Length)
 	for Index = 1, Length do
+		local Item_1 = {} :: any
 		-- Read 2
 		local OPERATION_OFFSET_0 = ARRAY_START_1
 		ARRAY_START_1 += 2
 		Length = buffer.readu16(RecieveBuffer, OPERATION_OFFSET_0)
-		local Item_1 = buffer.readstring(RecieveBuffer, Read(Length), Length)
-		table.insert(Value.equippedUUIDs, Item_1)
+		Item_1.uuid = buffer.readstring(RecieveBuffer, Read(Length), Length)
+		-- Read 2
+		local OPERATION_OFFSET_1 = ARRAY_START_1
+		ARRAY_START_1 += 2
+		Length = buffer.readu16(RecieveBuffer, OPERATION_OFFSET_1)
+		Item_1.petName = buffer.readstring(RecieveBuffer, Read(Length), Length)
+		table.insert(Value.equippedPets, Item_1)
 	end
 	-- END ARRAY
 	return Value
@@ -484,7 +490,7 @@ Reliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
 				table.insert(Queue.Reliable[8], {Value} :: {any})
 			end
 		elseif Index == 10 then
-			local Value: { userId: number, equippedUUIDs: { string } } = SerdesFunctions.ReadEVENT_SyncEquippedPets()
+			local Value: { userId: number, equippedPets: { { uuid: string, petName: string } } } = SerdesFunctions.ReadEVENT_SyncEquippedPets()
 			if Events.Reliable[10] ~= nil then
 				SerdesEvent = "SyncEquippedPets"
 				Events.Reliable[10](Value)
@@ -624,7 +630,7 @@ local Returns = table.freeze({
 		end
 	},
 	SyncEquippedPets = {
-		On = function(Listener: (Value: { userId: number, equippedUUIDs: { string } }) -> ()): () -> ()
+		On = function(Listener: (Value: { userId: number, equippedPets: { { uuid: string, petName: string } } }) -> ()): () -> ()
 			Events.Reliable[10] = Listener
 			for Index, Arguments in Queue.Reliable[10] do
 				Listener(table.unpack(Arguments))

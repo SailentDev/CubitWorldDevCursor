@@ -119,6 +119,6 @@ event SyncEquippedPets {
     Call: SingleSync,
     Data: struct {
         userId: f64,
-        equippedUUIDs: string[]
+        equippedPets: EquippedPetInfo[]
     }
 }

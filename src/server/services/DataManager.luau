@@ -17,6 +17,7 @@ local DEFAULT_DATA: Types.ProfileData = {
 	Coins = 999999999,
 	Pets = {},
 	Eggs = {},
+	EquippedPets = {}, -- NAPRAWIONE: Zabezpieczenie przed nil dla nowych profilów
 	Settings = {
 		FOV = 70,
 		MusicVol = 50,
@@ -68,13 +69,24 @@ function DataManager:SyncPlayerData(player: Player)
 		end
 	end
 
-	-- NAPRAWIONE: Wysyłamy oryginalną listę UUID bezpośrednio do klientów, bez zamiany na nazwy tekstowe!
+	-- NAPRAWIONE: Mapowanie UUID na strukturę akceptowaną przez nowy event Blink!
+	local equippedPetsData = {}
 	if profile.Data.EquippedPets then
-		Blink.SyncEquippedPets.FireAll({
-			userId = player.UserId,
-			equippedUUIDs = profile.Data.EquippedPets
-		})
+		for _, uuid in ipairs(profile.Data.EquippedPets) do
+			local petData = profile.Data.Pets[uuid]
+			if petData then
+				table.insert(equippedPetsData, {
+					uuid = uuid,
+					petName = petData.petName
+				})
+			end
+		end
 	end
+
+	Blink.SyncEquippedPets.FireAll({
+		userId = player.UserId,
+		equippedPets = equippedPetsData -- Zgodne z nowym .blink (equippedPets zamiast equippedUUIDs)
+	})
 	
 	print(string.format("[DATA -> SYNC SUCCESS] Zsynchronizowano pomyślnie gracza %s", player.Name))
 end
@@ -88,6 +100,11 @@ local function onPlayerAdded(player: Player)
 		if player.Parent then
 			activeProfiles[player] = profile
 			print(string.format("[DATA -> SUCCESS] Profil gracza %s załadowany pomyślnie!", player.Name))
+
+			-- Zapewnienie stałej struktury tabeli EquippedPets
+			if not profile.Data.EquippedPets then
+				profile.Data.EquippedPets = {}
+			end
 
 			-- ==================== MIGROWANIE I NAPRAWA DANYCH (TYLKO NA SERWERZE) ====================
 			if profile.Data.Pets then

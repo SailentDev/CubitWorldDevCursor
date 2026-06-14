@@ -320,24 +320,31 @@ function SerdesFunctions.ReadEVENT_RequestEquip(): ({ uuid: string })
 	return Value
 end
 
-function SerdesFunctions.WriteEVENT_SyncEquippedPets(Value: { userId: number, equippedUUIDs: { string } }): ()
+function SerdesFunctions.WriteEVENT_SyncEquippedPets(Value: { userId: number, equippedPets: { { uuid: string, petName: string } } }): ()
 	-- Allocate BLOCK: 11 bytes
 	local BLOCK_START = Allocate(11)
 	buffer.writeu8(SendBuffer, BLOCK_START + 0, 10)
 	buffer.writef64(SendBuffer, BLOCK_START + 1, Value.userId)
 	-- START ARRAY
-	buffer.writeu16(SendBuffer, BLOCK_START + 9, #Value.equippedUUIDs)
-		-- Allocate BLOCK: 2 bytes
-	local ARRAY_START_1 = Allocate(2 * #Value.equippedUUIDs)
-	for Index = 1, #Value.equippedUUIDs do
-		local Item_1 = Value.equippedUUIDs[Index]
-		local Length = #Item_1
+	buffer.writeu16(SendBuffer, BLOCK_START + 9, #Value.equippedPets)
+		-- Allocate BLOCK: 4 bytes
+	local ARRAY_START_1 = Allocate(4 * #Value.equippedPets)
+	for Index = 1, #Value.equippedPets do
+		local Item_1 = Value.equippedPets[Index]
+		local Length = #Item_1.uuid
 		-- Allocate 2
 		local OPERATION_OFFSET_0 = ARRAY_START_1
 		ARRAY_START_1 += 2
 		buffer.writeu16(SendBuffer, OPERATION_OFFSET_0, Length)
 		Allocate(Length)
-		buffer.writestring(SendBuffer, SendOffset, Item_1, Length)
+		buffer.writestring(SendBuffer, SendOffset, Item_1.uuid, Length)
+		local Length = #Item_1.petName
+		-- Allocate 2
+		local OPERATION_OFFSET_1 = ARRAY_START_1
+		ARRAY_START_1 += 2
+		buffer.writeu16(SendBuffer, OPERATION_OFFSET_1, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Item_1.petName, Length)
 	end
 	-- END ARRAY
 end
@@ -860,12 +867,12 @@ local Returns = table.freeze({
 		end
 	},
 	SyncEquippedPets = {
-		Fire = function(Player: Player, Value: { userId: number, equippedUUIDs: { string } }): ()
+		Fire = function(Player: Player, Value: { userId: number, equippedPets: { { uuid: string, petName: string } } }): ()
 			Load(PlayersMap[Player])
 			SerdesFunctions.WriteEVENT_SyncEquippedPets(Value)
 			PlayersMap[Player] = Save()
 		end,
-		FireAll = function(Value: { userId: number, equippedUUIDs: { string } }): ()
+		FireAll = function(Value: { userId: number, equippedPets: { { uuid: string, petName: string } } }): ()
 			Load()
 			SerdesFunctions.WriteEVENT_SyncEquippedPets(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -877,7 +884,7 @@ local Returns = table.freeze({
 				PlayersMap[Player] = Save()
 			end
 		end,
-		FireList = function(List: {Player}, Value: { userId: number, equippedUUIDs: { string } }): ()
+		FireList = function(List: {Player}, Value: { userId: number, equippedPets: { { uuid: string, petName: string } } }): ()
 			Load()
 			SerdesFunctions.WriteEVENT_SyncEquippedPets(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
@@ -889,7 +896,7 @@ local Returns = table.freeze({
 				PlayersMap[Player] = Save()
 			end
 		end,
-		FireExcept = function(Except: Player, Value: { userId: number, equippedUUIDs: { string } }): ()
+		FireExcept = function(Except: Player, Value: { userId: number, equippedPets: { { uuid: string, petName: string } } }): ()
 			Load()
 			SerdesFunctions.WriteEVENT_SyncEquippedPets(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances

@@ -5,12 +5,11 @@ local ServerStorage = game:GetService("ServerStorage")
 
 local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
 local DataManager = require(script.Parent.DataManager)
-local PetDatabase = require(ReplicatedStorage.Shared:WaitForChild("PetDatabase") :: ModuleScript)
 
--- Zmieniono limit na 1
 local MAX_EQUIPPED_PETS = 1
 
 local PetService = {}
+local currentEquippedCache: { [number]: { { uuid: string, petName: string } } } = {}
 
 local function przekazModelDoReplicatedStorage(petName: string)
 	local sharedAssets = ReplicatedStorage.Shared:WaitForChild("Assets") :: Folder
@@ -19,7 +18,6 @@ local function przekazModelDoReplicatedStorage(petName: string)
 		replicatedFolder = Instance.new("Folder")
 		replicatedFolder.Name = "Pets"
 		replicatedFolder.Parent = sharedAssets
-		print("[PetService] Utworzono folder 'Pets' w Shared.Assets")
 	end
 
 	if not replicatedFolder:FindFirstChild(petName) then
@@ -27,60 +25,54 @@ local function przekazModelDoReplicatedStorage(petName: string)
 		if sourceModel then
 			local clone = sourceModel:Clone()
 			clone.Parent = replicatedFolder
-			print("[PetService] Zreplikowano model do ReplicatedStorage:", petName)
-		else
-			warn("[PetService] Model nie znaleziony w ServerStorage dla peta:", petName)
 		end
 	end
 end
 
-function PetService.OnInit()
-	print("[PetService] Initialized (OnInit)")
+local function getEquippedPetsData(profile: any): { { uuid: string, petName: string } }
+	local result = {}
+	if profile and profile.Data.EquippedPets then
+		for _, uuid in ipairs(profile.Data.EquippedPets) do
+			local petData = profile.Data.Pets[uuid]
+			if petData then
+				table.insert(result, { uuid = uuid, petName = petData.petName })
+			end
+		end
+	end
+	return result
 end
 
+function PetService.OnInit() end
+
 function PetService.OnStart()
-	print("[PetService] Starting – hooking events")
+	print("[PetService] Server Started")
 
 	Blink.RequestEquip.On(function(player: Player, data: { uuid: string })
 		local profile = DataManager:GetProfile(player)
 		if not profile then return end
 
-		if not profile.Data.EquippedPets then
-			profile.Data.EquippedPets = {}
-		end
-
 		local uuid = data.uuid
 		local petData = profile.Data.Pets[uuid]
-		
-		-- ANTY-CHEAT ZABEZPIECZENIE: Jeśli gracz nie posiada peta o takim UUID w bazie, przerywamy!
-		if not petData then 
-			warn(string.format("[PetService -> ANTY-CHEAT] Gracz %s próbował założyć nieposiadanego peta!", player.Name))
-			return 
-		end
+		if not petData then return end
 
-		local equippedList: { string } = profile.Data.EquippedPets
+		local equippedList: { string } = profile.Data.EquippedPets or {}
 		local foundIndex = table.find(equippedList, uuid)
 
 		if foundIndex then
-			-- Jeśli gracz kliknął peta, którego JUŻ MA załozonego -> zdejmij go
 			table.remove(equippedList, foundIndex)
-			print("[PetService] Zdjęto peta o UUID:", uuid)
 		else
-			-- AUTOMATYCZNA PODMIANA & ANTY-CHEAT: 
-			-- Czyszczenie całej tablicy gwarantuje, że stary pet zostanie automatycznie zdjęty,
-			-- a cheater nie będzie w stanie ominąć limitu poprzez spamowanie pakietami.
 			table.clear(equippedList)
 			table.insert(equippedList, uuid)
-			print("[PetService] Założono nowy pet o UUID:", uuid, "oraz automatycznie zdjęto poprzedni.")
-
-			-- Replikacja modelu na żądanie przy założeniu
 			przekazModelDoReplicatedStorage(petData.petName)
 		end
+		profile.Data.EquippedPets = equippedList
 
-		-- Wysłanie aktualnej listy (zawsze max 1 pet) do wszystkich klientów
+		local sendData = getEquippedPetsData(profile)
+		currentEquippedCache[player.UserId] = sendData
+
 		Blink.SyncEquippedPets.FireAll({
 			userId = player.UserId,
-			equippedUUIDs = equippedList, 
+			equippedPets = sendData, 
 		})
 	end)
 
@@ -93,32 +85,42 @@ function PetService.OnStart()
 				task.wait(0.1)
 			end
 
-			if profile and profile.Data.EquippedPets then
-				for _, petUUID in ipairs(profile.Data.EquippedPets) do
-					local pData = profile.Data.Pets[petUUID]
-					if pData then
-						przekazModelDoReplicatedStorage(pData.petName)
-					end
-				end
+			if not player:IsDescendantOf(Players) or not profile then return end
+
+			local sendData = getEquippedPetsData(profile)
+			currentEquippedCache[player.UserId] = sendData
+
+			for _, pInfo in ipairs(sendData) do
+				przekazModelDoReplicatedStorage(pInfo.petName)
+			end
+
+			-- Powiedz wszystkim o tym nowym graczu
+			Blink.SyncEquippedPets.FireAll({
+				userId = player.UserId,
+				equippedPets = sendData,
+			})
+
+			-- Daj nowemu graczowi dane o wszystkich obecnych na serwerze
+			for onlineUserId, onlinePets in pairs(currentEquippedCache) do
+				if onlineUserId == player.UserId then continue end
+				Blink.SyncEquippedPets.Fire(player, {
+					userId = onlineUserId,
+					equippedPets = onlinePets,
+				})
 			end
 		end)
 	end
 
 	local function onPlayerRemoving(player: Player)
-		local profile = DataManager:GetProfile(player)
-		if profile and profile.Data.EquippedPets then
-			Blink.SyncEquippedPets.FireAll({
-				userId = player.UserId,
-				equippedUUIDs = {},
-			})
-		end
+		currentEquippedCache[player.UserId] = nil
+		Blink.SyncEquippedPets.FireAll({
+			userId = player.UserId,
+			equippedPets = {},
+		})
 	end
 
 	Players.PlayerAdded:Connect(onPlayerAdded)
-	for _, player in ipairs(Players:GetPlayers()) do
-		onPlayerAdded(player)
-	end
-	
+	for _, player in ipairs(Players:GetPlayers()) do onPlayerAdded(player) end
 	Players.PlayerRemoving:Connect(onPlayerRemoving)
 end
 
