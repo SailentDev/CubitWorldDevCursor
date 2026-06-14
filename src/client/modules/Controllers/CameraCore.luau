@@ -4,6 +4,7 @@
 	CameraCore
 	Shared third-person camera math: spherecast collision, smoothed zoom distance,
 	and instantaneous positional/orientational updates for responsive feel.
+	Includes highly optimized First-Person logic with part caching.
 ]]
 
 local Players = game:GetService("Players")
@@ -27,7 +28,7 @@ export type CameraUpdateInput = {
 	rotation: CFrame,
 	targetDistance: number,
 	deltaTime: number,
-	filterInstances: { Instance }?, -- Retained in type for compatibility; ignored internally
+	filterInstances: { Instance }?,
 }
 
 export type CameraUpdateOutput = {
@@ -37,7 +38,6 @@ export type CameraUpdateOutput = {
 }
 
 export type CameraCore = {
-	-- Internal State
 	_sphereRadius: number,
 	_minDistance: number,
 	_maxDistance: number,
@@ -47,10 +47,14 @@ export type CameraCore = {
 	_smoothedDistance: number,
 	_raycastParams: RaycastParams,
 	_shiftLockActive: boolean,
+	
+	-- Caching for performance
 	_lastCharacter: Model?,
 	_lastRootPart: BasePart?,
+	_cachedCharacterParts: { BasePart },
+	_characterAddedConn: RBXScriptConnection?,
+	_characterDescendantAddedConn: RBXScriptConnection?,
 	
-	-- Methods
 	Update: (self: CameraCore, input: CameraUpdateInput) -> CameraUpdateOutput,
 	SetFilterInstances: (self: CameraCore, instances: { Instance }) -> (),
 	GetSmoothedDistance: (self: CameraCore) -> number,
@@ -58,10 +62,11 @@ export type CameraCore = {
 	_resolveCollision: (self: CameraCore, focus: Vector3, lookVector: Vector3, distance: number) -> Vector3,
 	GetLimits: (self: CameraCore) -> (number, number),
 	ApplyShiftLock: (self: CameraCore, isActive: boolean) -> (),
+	_updateCharacterCache: (self: CameraCore, character: Model) -> (),
 }
 
 local DEFAULT_SPHERE_RADIUS = 0.25
-local DEFAULT_MIN_DISTANCE = 2
+local DEFAULT_MIN_DISTANCE = 0.5 -- Lowered for first person
 local DEFAULT_MAX_DISTANCE = 28
 local DEFAULT_DISTANCE = 20
 local DEFAULT_ZOOM_LERP_SPEED = 16
@@ -74,25 +79,15 @@ local EPSILON = 1e-4
 local CameraCore = {}
 CameraCore.__index = CameraCore
 
---[[
-	Exponential smoothing for zoom; framerate-independent via deltaTime.
-]]
 local function lerpZoom(current: number, target: number, speed: number, deltaTime: number): number
-	if deltaTime <= 0 then
-		return target
-	end
-
+	if deltaTime <= 0 then return target end
 	local clampedDT = math.min(deltaTime, 0.1)
 	local alpha = 1 - math.exp(-speed * clampedDT)
 	return current + (target - current) * alpha
 end
 
---[[
-	Builds a CameraCore instance with RaycastParams configured for the "Camera" collision group.
-]]
 function CameraCore.new(config: CameraCoreConfig?): CameraCore
 	local resolvedConfig: CameraCoreConfig = config or {}
-
 	local self = setmetatable({}, CameraCore) :: any
 
 	self._sphereRadius = resolvedConfig.sphereRadius or DEFAULT_SPHERE_RADIUS
@@ -105,104 +100,115 @@ function CameraCore.new(config: CameraCoreConfig?): CameraCore
 	local defaultDistance = resolvedConfig.defaultDistance or DEFAULT_DISTANCE
 	self._smoothedDistance = math.clamp(defaultDistance, self._minDistance, self._maxDistance)
 
-	-- Configure RaycastParams to respect the Collision Group matrix
 	self._raycastParams = RaycastParams.new()
-	self._raycastParams.CollisionGroup = "Camera" -- Automatically ignores "Players" and "Assets2" groups
+	self._raycastParams.CollisionGroup = "Camera"
 	self._raycastParams.IgnoreWater = true
 	self._raycastParams.RespectCanCollide = true
 	
 	self._shiftLockActive = false
 	self._lastCharacter = nil
 	self._lastRootPart = nil
+	self._cachedCharacterParts = {}
 
 	return (self :: any) :: CameraCore
 end
 
---[[
-	No-op implementation to maintain structural interface compatibility.
-	Filtering is handled natively by the "Camera" CollisionGroup.
-]]
-function CameraCore.SetFilterInstances(self: CameraCore, instances: { Instance }): ()
-	-- Intentional no-op: prevents unnecessary allocation and preserves performance.
+-- Updates the internal cache of character parts to avoid calling GetDescendants() every frame
+function CameraCore._updateCharacterCache(self: CameraCore, character: Model)
+	self._lastCharacter = character
+	self._lastRootPart = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	
+	table.clear(self._cachedCharacterParts)
+	
+	for _, descendant in character:GetDescendants() do
+		if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then
+			table.insert(self._cachedCharacterParts, descendant)
+		end
+	end
+	
+	-- Listen for new parts (like equipping tools or armor)
+	if self._characterDescendantAddedConn then
+		self._characterDescendantAddedConn:Disconnect()
+	end
+	self._characterDescendantAddedConn = character.DescendantAdded:Connect(function(descendant)
+		if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then
+			table.insert(self._cachedCharacterParts, descendant)
+		end
+	end)
 end
 
---[[
-	Returns the current smoothed zoom distance (post-lerp, pre-collision).
-]]
+function CameraCore.SetFilterInstances(self: CameraCore, instances: { Instance }): () end
+
 function CameraCore.GetSmoothedDistance(self: CameraCore): number
 	return self._smoothedDistance
 end
 
---[[
-	Snap or seed the internal zoom distance (e.g. on character respawn).
-]]
 function CameraCore.ResetZoom(self: CameraCore, distance: number?): ()
 	local resolved = distance or self._smoothedDistance
 	self._smoothedDistance = math.clamp(resolved, self._minDistance, self._maxDistance)
 end
 
---[[
-	Resolves the final camera world position using a spherecast from focus toward the ideal offset.
-	Origin is nudged along the cast direction so casts do not start inside the focus volume.
-]]
-function CameraCore._resolveCollision(
-	self: CameraCore,
-	focus: Vector3,
-	lookVector: Vector3,
-	distance: number
-): Vector3
+function CameraCore._resolveCollision(self: CameraCore, focus: Vector3, lookVector: Vector3, distance: number): Vector3
 	local backward = -lookVector
 	local castDirection = backward * distance
 	local castLength = castDirection.Magnitude
 
-	if castLength < EPSILON then
-		return focus
-	end
+	if castLength < EPSILON then return focus end
 
 	local castOrigin = focus + backward.Unit * self._raycastOriginEpsilon
 	local castVector = backward * math.max(castLength - self._raycastOriginEpsilon, 0)
 
-	if castVector.Magnitude < EPSILON then
-		return focus + castDirection
-	end
+	if castVector.Magnitude < EPSILON then return focus + castDirection end
 
 	local result = Workspace:Spherecast(castOrigin, self._sphereRadius, castVector, self._raycastParams)
-	if not result then
-		return focus + castDirection
-	end
+	if not result then return focus + castDirection end
 
 	local safeDistance = math.max(result.Distance - self._collisionPadding, 0)
 	return castOrigin + backward.Unit * safeDistance
 end
 
---[[
-	Computes an instantaneous camera CFrame and focus point from rotation and zoom inputs.
-	Only target distance is smoothed; position and orientation follow inputs directly each frame.
-]]
 function CameraCore.Update(self: CameraCore, input: CameraUpdateInput): CameraUpdateOutput
 	local clampedTarget = math.clamp(input.targetDistance, self._minDistance, self._maxDistance)
-	self._smoothedDistance = lerpZoom(
-		self._smoothedDistance,
-		clampedTarget,
-		self._zoomLerpSpeed,
-		input.deltaTime
-	)
+	self._smoothedDistance = lerpZoom(self._smoothedDistance, clampedTarget, self._zoomLerpSpeed, input.deltaTime)
 
-	-- Direct character alignment to camera look vector on RenderStep (No physics thread sync overhead)
-	if self._shiftLockActive and LocalPlayer then
+	local isFirstPerson = clampedTarget <= self._minDistance + 0.1
+	local shouldRotateCharacter = self._shiftLockActive or isFirstPerson
+
+	if LocalPlayer then
 		local character = LocalPlayer.Character
 		if character then
+			-- Update cache if character changed
 			if character ~= self._lastCharacter then
-				self._lastCharacter = character
-				self._lastRootPart = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+				self:_updateCharacterCache(character)
 			end
 			
-			local rootPart = self._lastRootPart
-			if rootPart then
-				local lookVector = input.rotation.LookVector
-				local horizontalLook = Vector3.new(lookVector.X, 0, lookVector.Z)
-				if horizontalLook.Magnitude > EPSILON then
-					rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + horizontalLook.Unit)
+			-- 1. Handle Humanoid AutoRotate
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				if humanoid.AutoRotate == shouldRotateCharacter then
+					humanoid.AutoRotate = not shouldRotateCharacter
+				end
+			end
+
+			-- 2. Handle Character Rotation
+			if shouldRotateCharacter then
+				local rootPart = self._lastRootPart
+				if rootPart then
+					local lookVector = input.rotation.LookVector
+					local horizontalLook = Vector3.new(lookVector.X, 0, lookVector.Z)
+					if horizontalLook.Magnitude > EPSILON then
+						rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + horizontalLook.Unit)
+					end
+				end
+			end
+
+			-- 3. Handle First Person Character Transparency (Using Cache)
+			-- Note: Roblox's engine resets LocalTransparencyModifier every frame, so we MUST apply it every frame.
+			local transparency = isFirstPerson and 1 or 0
+			for _, part in self._cachedCharacterParts do
+				-- Keep tools visible in first person
+				if not part:FindFirstAncestorOfClass("Tool") then
+					part.LocalTransparencyModifier = transparency
 				end
 			end
 		end
@@ -210,16 +216,15 @@ function CameraCore.Update(self: CameraCore, input: CameraUpdateInput): CameraUp
 
 	local focus = input.focusOrigin
 
-	-- Apply Shift Lock positional offset
-	if self._shiftLockActive then
+	if self._shiftLockActive and not isFirstPerson then
 		local offsetWorld = input.rotation:VectorToWorldSpace(SHIFT_LOCK_OFFSET)
 		focus = focus + offsetWorld
 	end
 
 	local lookVector = input.rotation.LookVector
-	local cameraPosition = self:_resolveCollision(focus, lookVector, self._smoothedDistance)
+	local actualDistance = isFirstPerson and 0 or self._smoothedDistance
+	local cameraPosition = self:_resolveCollision(focus, lookVector, actualDistance)
 
-	-- Offset translation directly onto pre-existing rotation matrix.
 	local cframe = input.rotation + cameraPosition
 
 	return {
@@ -229,21 +234,13 @@ function CameraCore.Update(self: CameraCore, input: CameraUpdateInput): CameraUp
 	}
 end
 
---[[
-	Returns the min and max distance limits.
-]]
 function CameraCore.GetLimits(self: CameraCore) : (number, number)
 	return self._minDistance, self._maxDistance
 end
 
---[[
-	Modifies the camera core's shift lock status. Handles state changes for UserInputService
-	and Humanoid behavior changes.
-]]
 function CameraCore.ApplyShiftLock(self: CameraCore, isActive: boolean): ()
 	self._shiftLockActive = isActive
 
-	-- Configure mouse lock behavior and visibility safely
 	if isActive then
 		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCurrentPosition then
 			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
@@ -257,17 +254,6 @@ function CameraCore.ApplyShiftLock(self: CameraCore, isActive: boolean): ()
 		end
 		if not UserInputService.MouseIconEnabled then
 			UserInputService.MouseIconEnabled = true
-		end
-	end
-
-	-- Configure Humanoid AutoRotate state
-	if LocalPlayer then
-		local character = LocalPlayer.Character
-		if character then
-			local humanoid = character:FindFirstChildOfClass("Humanoid")
-			if humanoid then
-				humanoid.AutoRotate = not isActive
-			end
 		end
 	end
 end
