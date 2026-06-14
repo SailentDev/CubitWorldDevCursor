@@ -139,6 +139,13 @@ function InventoryClient.OnStart()
 	EquipToggleButton.MouseButton1Click:Connect(function()
 		local selectedUUID = DetailsFrame:GetAttribute("SelectedPetUUID")
 		if selectedUUID and typeof(selectedUUID) == "string" then
+			-- NAPRAWIONE: Natychmiastowa zmiana wizualna dla responsywności UI
+			if EquipToggleButton.Text == "Equip" then
+				EquipToggleButton.Text = "Unequip"
+			else
+				EquipToggleButton.Text = "Equip"
+			end
+			
 			Blink.RequestEquip.Fire({ uuid = selectedUUID })
 			print("[InventoryClient] RequestEquip fired for UUID:", selectedUUID)
 		else
@@ -146,11 +153,20 @@ function InventoryClient.OnStart()
 		end
 	end)
 
-	-- Dynamiczna reakcja na zmianę wyposażonych petów lokalnego gracza
+	-- NAPRAWIONE: Bezpieczne mapowanie struktury tabeli petów z Blinka u klienta
 	PetClient.EquippedChanged:Connect(function(equippedUUIDs)
 		local selectedUUID = DetailsFrame:GetAttribute("SelectedPetUUID")
 		if selectedUUID then
-			local isEquipped = table.find(equippedUUIDs, selectedUUID) ~= nil
+			local isEquipped = false
+			for _, item in ipairs(equippedUUIDs) do
+				if typeof(item) == "table" and item.uuid == selectedUUID then
+					isEquipped = true
+					break
+				elseif typeof(item) == "string" and item == selectedUUID then
+					isEquipped = true
+					break
+				end
+			end
 			EquipToggleButton.Text = isEquipped and "Unequip" or "Equip"
 		end
 	end)

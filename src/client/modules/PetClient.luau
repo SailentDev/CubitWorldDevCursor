@@ -126,7 +126,7 @@ local function startPetUpdater()
 				local idealPos = targetCFrame.Position
 				
 				-- ====================================================================
-				-- PRO ROZWIĄZANIE: POZIOME OMIJANIE PRZESZKÓD (np. pni drzew, ścian)
+				-- POZIOME OMIJANIE PRZESZKÓD (np. pni drzew, ścian)
 				-- ====================================================================
 				local horizontalRayOrigin = Vector3.new(hrpPos.X, hrpPos.Y - 1, hrpPos.Z)
 				local horizontalRayDir = idealPos - horizontalRayOrigin
@@ -135,7 +135,6 @@ local function startPetUpdater()
 				local finalHorizontalPos = idealPos
 
 				if wallResult then
-					-- Wykryto przeszkodę (np. pień)! Zatrzymujemy peta przed nią, odsuwając go o bezpieczny dystans (1.2 studa)
 					finalHorizontalPos = wallResult.Position + (wallResult.Normal * 1.2)
 				end
 				-- ====================================================================
@@ -147,7 +146,6 @@ local function startPetUpdater()
 				local baseGroundY = playerGroundY 
 				
 				if rayResult then
-					-- Jeśli to mały obiekt/schodek (niższy niż MAX_CLIMB_HEIGHT), pet na niego płynnie wejdzie
 					if (rayResult.Position.Y - playerGroundY) <= MAX_CLIMB_HEIGHT then
 						baseGroundY = rayResult.Position.Y
 					end

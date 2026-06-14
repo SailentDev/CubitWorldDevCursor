@@ -2,7 +2,8 @@
 local StarterPlayerScripts = script.Parent
 local modulesFolder = StarterPlayerScripts:WaitForChild("modules") :: Folder
 local uiFolder = modulesFolder:WaitForChild("ui") :: Folder
-local inventoryFolder = modulesFolder:WaitForChild("Inventory") :: Folder -- Dodane
+local inventoryFolder = modulesFolder:WaitForChild("Inventory") :: Folder
+local optimizationFolder = StarterPlayerScripts:WaitForChild("Optimization") :: Folder -- DODANE
 
 local ClientLoader = {}
 
@@ -37,14 +38,22 @@ function ClientLoader.Boot()
 		end
 	end
 	
-	-- 3. Zbierz moduły z subfolderu 'Inventory' (DODANE)
+	-- 3. Zbierz moduły z subfolderu 'Inventory'
 	for _, child in inventoryFolder:GetChildren() do
 		if child:IsA("ModuleScript") then
 			table.insert(modulesToLoad, child)
 		end
 	end
 
-	-- 4. Bezpieczne wykonanie require i rejestracja
+	-- 4. Zbierz moduły z folderu 'Optimization' (NOWOŚĆ)
+	-- To załaduje TYLKO 'ClientOptimization', a zignoruje LocalScripts!
+	for _, child in optimizationFolder:GetChildren() do
+		if child:IsA("ModuleScript") then
+			table.insert(modulesToLoad, child)
+		end
+	end
+
+	-- Bezpieczne wykonanie require i rejestracja
 	for _, moduleScript in modulesToLoad do
 		local requireSuccess, module = pcall(require, moduleScript)
 
@@ -61,9 +70,7 @@ function ClientLoader.Boot()
 		end
 	end
 
-	-- ==================================================
 	-- FAZA 1: OnInit
-	-- ==================================================
 	print("[🔄 CLIENT PHASE 1] Uruchamianie fazy OnInit...")
 	for _, name in moduleNamesOrder do
 		local module = loadedModules[name]
@@ -77,9 +84,7 @@ function ClientLoader.Boot()
 		end
 	end
 
-	-- ==================================================
 	-- FAZA 2: OnStart
-	-- ==================================================
 	print("[🔄 CLIENT PHASE 2] Uruchamianie fazy OnStart...")
 	for _, name in moduleNamesOrder do
 		local module = loadedModules[name]
