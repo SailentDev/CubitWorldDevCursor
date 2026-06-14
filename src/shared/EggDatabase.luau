@@ -14,8 +14,8 @@ local Database: { [string]: EggInfo } = {
 		Price = 500, 
 		CurrencyType = "Coins", 
 		DropChances = {
-			["Dog"] = 99.0,      
-			["Pyrodon"] = 1.0,   
+			["Dog"] = 50.0,      
+			["Pyrodon"] = 50.0,   
 		}
 	},
 }

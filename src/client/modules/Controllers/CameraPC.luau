@@ -71,8 +71,8 @@ export type CameraPC = {
 	_onInputEnded: (self: CameraPC, input: InputObject, gameProcessed: boolean) -> (),
 }
 
-local DEFAULT_YAW_SENSITIVITY = 0.01
-local DEFAULT_PITCH_SENSITIVITY = 0.01
+local DEFAULT_YAW_SENSITIVITY = 0.006
+local DEFAULT_PITCH_SENSITIVITY = 0.006
 local DEFAULT_ZOOM_STEP = 2.2
 local DEFAULT_MIN_PITCH = math.rad(-70)
 local DEFAULT_MAX_PITCH = math.rad(70)
