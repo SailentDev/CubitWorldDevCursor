@@ -59,10 +59,8 @@ local function onUpdate(dt: number): ()
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	if not humanoid then return end
 
-	-- Continuous Jump Logic
-	if _isJumping then 
-		humanoid.Jump = true 
-	end
+	-- ROZWIĄZANIE DLA CCL: Gwarantuje wyłączenie skoku po puszczeniu UI
+	humanoid.Jump = _isJumping
 
 	-- Camera-Relative Movement Logic
 	local camera = Workspace.CurrentCamera

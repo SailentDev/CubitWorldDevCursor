@@ -75,14 +75,11 @@ local function onUpdate(): ()
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if not humanoid then return end
 
-	-- Handle Jumping
-	if _isJumping then
-		humanoid.Jump = true
-	end
+	-- ROZWIĄZANIE DLA CCL: Przypisujemy bezpośrednio true/false
+	humanoid.Jump = _isJumping
 
 	-- Handle Movement
 	local camera = Workspace.CurrentCamera
-	if not camera then return end
 
 	local moveDirection = V3_NEW(
 		_inputState.Right - _inputState.Left,
