@@ -16,7 +16,7 @@ local CameraScript = {}
 
 -- Constants
 local STARTING_ZOOM = 16 -- [TUTAJ] Domyślne oddalenie kamery po wejściu (zwiększone z 10)
-local STARTING_PITCH = math.rad(10) -- [TUTAJ] Kąt startowy (0 to idealny poziom, im więcej, tym bardziej patrzy w dół. 10 to delikatny, naturalny kąt)
+local STARTING_PITCH = math.rad(-4) -- [TUTAJ] Kąt startowy (0 to idealny poziom, im więcej, tym bardziej patrzy w dół. 10 to delikatny, naturalny kąt)
 
 local MIN_PITCH = math.rad(-70)
 local MAX_PITCH = math.rad(70)
