@@ -63,19 +63,19 @@ end
 -- SELF-INITIALIZATION BLOCK
 -- This runs once when the module is first required.
 do
-	_currentDevice = _calculateDeviceType(UserInputService:GetLastInputType())
+    _currentDevice = _calculateDeviceType(UserInputService:GetLastInputType())
 
-	UserInputService.LastInputTypeChanged:Connect(function(inputType: Enum.UserInputType)
-		local newDevice = _calculateDeviceType(inputType)
-		
-		if newDevice ~= _currentDevice then
-			_currentDevice = newDevice
-			-- Rule 5.1: Use task library for deferred execution
-			for _, callback in _listeners do
-				task.spawn(callback, _currentDevice)
-			end
-		end
-	end)
+    UserInputService.LastInputTypeChanged:Connect(function(inputType: Enum.UserInputType)
+        local newDevice: DeviceType = _calculateDeviceType(inputType)
+        
+        if newDevice ~= _currentDevice then
+            _currentDevice = newDevice
+            -- Rule 5.1: Use task library for deferred execution
+            for _, callback in _listeners do
+                task.spawn(callback, _currentDevice)
+            end
+        end
+    end)
 end
 
 return InputManager

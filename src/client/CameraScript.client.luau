@@ -1,274 +1,220 @@
 --!strict
 --!native
---[[
-    CameraScript (LocalScript Exception)
-    Main camera controller: Drives the active module on RenderStep.
-    Consumes InputManager for device context.
-]]
-
-local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 
--- Modules
-local Modules = script.Parent.modules
-local Controllers = Modules.controllers
+-- Pathing based on your Explorer hierarchy
+local Modules = script.Parent:WaitForChild("modules")
+local Controllers = Modules:WaitForChild("controllers")
 
-local CameraPC = require(Controllers.CameraPC)
-local CameraPhone = require(Controllers.CameraPhone)
-local InputManager = require(Controllers.InputManager)
+local CameraInput = require(Controllers:WaitForChild("CameraInput"))
+local CharacterManager = require(Controllers:WaitForChild("CharacterManager"))
 
--- Types
-type CameraViewState = any -- Private internal state
-
--- Constants
-local RENDER_STEP_NAME = "CubitCombatCustomCamera"
-local RENDER_STEP_PRIORITY = Enum.RenderPriority.Camera.Value
-local FOCUS_HEIGHT_OFFSET = 2
-
--- Localization (Rule 3.2)
-local vector3_new = Vector3.new
-local cframe_new = CFrame.new
-
--- Orchestrator Interface for Controllers
 local CameraScript = {}
 
+-- Constants
+local STARTING_ZOOM = 16 -- [TUTAJ] Domyślne oddalenie kamery po wejściu (zwiększone z 10)
+local STARTING_PITCH = math.rad(10) -- [TUTAJ] Kąt startowy (0 to idealny poziom, im więcej, tym bardziej patrzy w dół. 10 to delikatny, naturalny kąt)
+
+local MIN_PITCH = math.rad(-70)
+local MAX_PITCH = math.rad(70)
+local MIN_ZOOM = 0.5
+local MAX_ZOOM = 28
+local ZOOM_LERP_SPEED = 32
+local FOCUS_OFFSET = Vector3.new(0, 2, 0)
+local SHIFT_LOCK_OFFSET = Vector3.new(0, 0, 0)
+local SPHERE_RADIUS = 0.25
+local COLLISION_PADDING = 0.15
+local ORIGIN_EPSILON = 0.1
+
 -- State
-local _player = Players.LocalPlayer :: Player
-local _isShiftLocked = false
-local _cameraPC = CameraPC.new({ orchestrator = CameraScript })
-local _cameraPhone = CameraPhone.new()
-local _isCameraRunning = false
-local _isPCActive = true
+local yaw: number = 0
+local pitch: number = STARTING_PITCH
+local targetZoom: number = STARTING_ZOOM
+local actualZoom: number = STARTING_ZOOM
+local isShiftLocked: boolean = false
+local isRunning: boolean = false
 
-local _currentCharacter: Model? = nil
-local _currentFilterInstances: { Instance } = {}
+-- Cached Engine States & Instances (Micro-optimization)
+local currentMouseBehavior: Enum.MouseBehavior = Enum.MouseBehavior.Default
+local currentMouseIconEnabled: boolean = true
+local cachedFilterArray: {Instance} = {}
+local cachedRootPart: BasePart? = nil
 
-local _playerGui = _player:WaitForChild("PlayerGui") :: PlayerGui
-local _buttonConnection: RBXScriptConnection? = nil
+local raycastParams = RaycastParams.new()
+raycastParams.CollisionGroup = "Camera"
+raycastParams.IgnoreWater = true
+raycastParams.RespectCanCollide = true
 
---[[
-    Attempts to safely locate the ShiftlockButton in the PlayerGui with timeouts to avoid yielding.
-]]
-local function getShiftlockButton(): GuiButton?
-	local mainHUD = _playerGui:FindFirstChild("MainHUD") or _playerGui:WaitForChild("MainHUD", 5)
-	if not mainHUD then return nil end
-	
-	local buttons = mainHUD:FindFirstChild("Buttons") or mainHUD:WaitForChild("Buttons", 5)
-	if not buttons then return nil end
-	
-	return (buttons:FindFirstChild("ShiftlockButton") or buttons:WaitForChild("ShiftlockButton", 5)) :: GuiButton?
+local function resolveCollision(focus: Vector3, lookVector: Vector3, distance: number): Vector3
+    if distance < 1e-4 then return focus end
+    
+    local backward = -lookVector
+    local castOrigin = focus + backward * ORIGIN_EPSILON
+    local castDistance = math.max(distance - ORIGIN_EPSILON, 0)
+    local castVector = backward * castDistance
+    
+    if castDistance < 1e-4 then
+        return focus + backward * distance
+    end
+    
+    local result = Workspace:Spherecast(castOrigin, SPHERE_RADIUS, castVector, raycastParams)
+    if result then
+        local safeDistance = math.max(result.Distance - COLLISION_PADDING, 0)
+        return castOrigin + backward * safeDistance
+    end
+    
+    return focus + backward * distance
 end
 
---[[
-    Toggles the internal Shift Lock state and updates ONLY the active CameraCore instance.
-]]
-function CameraScript:ToggleShiftLock(): ()
-	_isShiftLocked = not _isShiftLocked
-	
-	if _isPCActive then
-		if _cameraPC and (_cameraPC :: any)._core then
-			(_cameraPC :: any)._core:ApplyShiftLock(_isShiftLocked)
-		end
-		if _cameraPhone and (_cameraPhone :: any)._core then
-			(_cameraPhone :: any)._core:ApplyShiftLock(false)
-		end
-	else
-		if _cameraPhone and (_cameraPhone :: any)._core then
-			(_cameraPhone :: any)._core:ApplyShiftLock(_isShiftLocked)
-		end
-		if _cameraPC and (_cameraPC :: any)._core then
-			(_cameraPC :: any)._core:ApplyShiftLock(false)
-		end
-	end
+function CameraScript.ToggleShiftLock()
+    isShiftLocked = not isShiftLocked
 end
 
---[[
-    Returns the world position the camera should look at.
-]]
-local function getFocusOrigin(character: Model): Vector3?
-	local rootPart: any = character:FindFirstChild("HumanoidRootPart")
-	if not rootPart then return nil end
-	return rootPart.Position + vector3_new(0, FOCUS_HEIGHT_OFFSET, 0)
+local function onRenderStep(deltaTime: number)
+    if not cachedRootPart then return end
+    
+    -- Enforce Mouse State for PC Right-Click & Shift Lock (Optimized)
+    local isRMBDown = CameraInput.IsDragging()
+    local shouldLockMouse = isShiftLocked or isRMBDown
+    local targetBehavior = shouldLockMouse and Enum.MouseBehavior.LockCurrentPosition or Enum.MouseBehavior.Default
+    local targetIconEnabled = not shouldLockMouse
+    
+    -- Only write to the engine API if the state actually changed
+    if currentMouseBehavior ~= targetBehavior then
+        currentMouseBehavior = targetBehavior
+        UserInputService.MouseBehavior = targetBehavior
+    end
+    
+    if currentMouseIconEnabled ~= targetIconEnabled then
+        currentMouseIconEnabled = targetIconEnabled
+        UserInputService.MouseIconEnabled = targetIconEnabled
+    end
+    
+    -- 1. Accumulate Input
+    local dyaw, dpitch, dzoom = CameraInput.GetDeltas()
+    
+    -- Discard zoom input if Shift Lock is active
+    if isShiftLocked then
+        dzoom = 0
+    end
+    
+    yaw = (yaw + dyaw) % (math.pi * 2)
+    pitch = math.clamp(pitch + dpitch, MIN_PITCH, MAX_PITCH)
+    targetZoom = math.clamp(targetZoom + dzoom, MIN_ZOOM, MAX_ZOOM)
+    
+    -- 2. Lerp Zoom
+    if deltaTime > 0 then
+        local alpha = 1 - math.exp(-ZOOM_LERP_SPEED * math.min(deltaTime, 0.1))
+        actualZoom = actualZoom + (targetZoom - actualZoom) * alpha
+    end
+    
+    local isFirstPerson = actualZoom <= MIN_ZOOM + 0.1
+    local shouldRotateCharacter = isShiftLocked or isFirstPerson
+    
+    -- 3. Calculate Pose
+    local rotation = CFrame.fromEulerAnglesYXZ(pitch, yaw, 0)
+    local lookVector = rotation.LookVector
+    
+    local focus = cachedRootPart.Position + FOCUS_OFFSET
+    if isShiftLocked and not isFirstPerson then
+        focus += rotation * SHIFT_LOCK_OFFSET
+    end
+    
+    local cameraDistance = isFirstPerson and 0 or actualZoom
+    local cameraPos = resolveCollision(focus, lookVector, cameraDistance)
+    
+    -- 4. Apply to Camera
+    local camera = Workspace.CurrentCamera
+    if camera then
+        camera.CameraType = Enum.CameraType.Scriptable
+        camera.CFrame = rotation + cameraPos 
+        camera.Focus = CFrame.new(focus)
+    end
+    
+    -- 5. Update Character
+    CharacterManager.Update(isFirstPerson, shouldRotateCharacter, lookVector)
 end
 
---[[
-    Builds the exclude list for spherecasts.
-]]
-local function getFilterInstances(character: Model): { Instance }
-	if character == _currentCharacter then
-		return _currentFilterInstances
-	end
-	_currentCharacter = character
-	_currentFilterInstances = { character } :: { Instance } -- Table cast resolves table invariance warning
-	return _currentFilterInstances
+function CameraScript.Start()
+    if isRunning then return end
+    isRunning = true
+    
+    local player = Players.LocalPlayer
+    local character = player and player.Character
+    
+    -- Cache the character array and RootPart once upon starting
+    if character then
+        cachedFilterArray = {character}
+        raycastParams.FilterDescendantsInstances = cachedFilterArray
+        cachedRootPart = character:WaitForChild("HumanoidRootPart", 5) :: BasePart?
+        CharacterManager.SetCharacter(character)
+    end
+    
+    local camera = Workspace.CurrentCamera
+    if camera then
+        local _, cy, _ = camera.CFrame:ToEulerAnglesYXZ()
+        pitch = STARTING_PITCH -- Wymuszamy kontrolowany, ładny kąt startowy zamiast domyślnego rzutu w dół
+        yaw = cy
+        targetZoom = STARTING_ZOOM
+        actualZoom = STARTING_ZOOM
+    end
+    
+    RunService:BindToRenderStep("CustomCameraSystem", Enum.RenderPriority.Camera.Value, onRenderStep)
 end
 
---[[
-    Activates the correct module, transfers ViewState, and handles ShiftlockButton visibility.
-]]
-local function setActiveController(device: "PC" | "Phone"): ()
-	local usePC = (device == "PC")
-	
-	-- Control UI visibility based on the active controller
-	local button = getShiftlockButton()
-	if button then
-		button.Visible = not usePC
-	end
-	
-	if usePC == _isPCActive then
-		if usePC then 
-			_cameraPC:Enable() 
-			if (_cameraPC :: any)._core then
-				(_cameraPC :: any)._core:ApplyShiftLock(_isShiftLocked)
-			end
-		else 
-			_cameraPhone:Enable() 
-			if (_cameraPhone :: any)._core then
-				(_cameraPhone :: any)._core:ApplyShiftLock(_isShiftLocked)
-			end
-		end
-		return
-	end
-
-	local viewState: CameraViewState
-	if usePC then
-		viewState = _cameraPhone:GetViewState()
-		_cameraPhone:Disable()
-		if (_cameraPhone :: any)._core then
-			(_cameraPhone :: any)._core:ApplyShiftLock(false)
-		end
-		
-		_cameraPC:ApplyViewState(viewState)
-		_cameraPC:Enable()
-		if (_cameraPC :: any)._core then
-			(_cameraPC :: any)._core:ApplyShiftLock(_isShiftLocked)
-		end
-	else
-		viewState = _cameraPC:GetViewState()
-		_cameraPC:Disable()
-		if (_cameraPC :: any)._core then
-			(_cameraPC :: any)._core:ApplyShiftLock(false)
-		end
-		
-		_cameraPhone:ApplyViewState(viewState)
-		_cameraPhone:Enable()
-		if (_cameraPhone :: any)._core then
-			(_cameraPhone :: any)._core:ApplyShiftLock(_isShiftLocked)
-		end
-	end
-
-	_isPCActive = usePC
+function CameraScript.Stop()
+    if not isRunning then return end
+    isRunning = false
+    RunService:UnbindFromRenderStep("CustomCameraSystem")
+    
+    -- Clear the cached array to prevent memory leaks
+    cachedFilterArray = {}
+    raycastParams.FilterDescendantsInstances = cachedFilterArray
+    cachedRootPart = nil
+    CharacterManager.SetCharacter(nil)
+    
+    if isShiftLocked then CameraScript.ToggleShiftLock() end
+    if Workspace.CurrentCamera then Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom end
 end
 
---[[
-    Sets up the ShiftlockButton click event and updates its visibility.
-]]
-local function setupShiftlockButton(): ()
-	if _buttonConnection then
-		_buttonConnection:Disconnect()
-		_buttonConnection = nil
-	end
-
-	local button = getShiftlockButton()
-	if button then
-		button.Visible = not _isPCActive
-		
-		_buttonConnection = button.Activated:Connect(function()
-			CameraScript:ToggleShiftLock()
-		end)
-	end
-end
-
---[[
-    Render-step callback.
-]]
-local function onRenderStep(deltaTime: number): ()
-	local character = _player.Character
-	if not character then return end
-
-	local focusOrigin = getFocusOrigin(character)
-	if not focusOrigin then return end
-
-	local input: any = {
-		focusOrigin = focusOrigin,
-		deltaTime = deltaTime,
-		filterInstances = getFilterInstances(character),
-	}
-
-	local output: any
-	if _isPCActive then
-		output = _cameraPC:Update(input)
-	else
-		output = _cameraPhone:Update(input)
-	end
-
-	local camera = Workspace.CurrentCamera
-	if not camera then return end
-
-	camera.CameraType = Enum.CameraType.Scriptable
-	camera.CFrame = output.cframe
-	camera.Focus = cframe_new(output.focus)
-end
-
-local function startCamera(): ()
-	if _isCameraRunning then return end
-	_isCameraRunning = true
-
-	local camera = Workspace.CurrentCamera
-	if camera then camera.CameraType = Enum.CameraType.Scriptable end
-
-	setActiveController(InputManager:GetDeviceType())
-	setupShiftlockButton()
-	RunService:BindToRenderStep(RENDER_STEP_NAME, RENDER_STEP_PRIORITY, onRenderStep)
-end
-
-local function stopCamera(): ()
-	if not _isCameraRunning then return end
-	_isCameraRunning = false
-
-	-- Clean up active Shift Lock connections to prevent memory/physics loops on character reset
-	if _isShiftLocked then
-		CameraScript:ToggleShiftLock()
-	end
-
-	if _buttonConnection then
-		_buttonConnection:Disconnect()
-		_buttonConnection = nil
-	end
-
-	RunService:UnbindFromRenderStep(RENDER_STEP_NAME)
-	_cameraPC:Disable()
-	_cameraPhone:Disable()
-
-	local camera = Workspace.CurrentCamera
-	if camera then camera.CameraType = Enum.CameraType.Custom end
-end
-
--- Initialization
-_cameraPC:Disable()
-_cameraPhone:Disable()
-
--- Listen for device changes from InputManager
-InputManager:OnDeviceChanged(function(newDevice: "PC" | "Phone")
-	if _isCameraRunning then
-		setActiveController(newDevice)
-	end
+-- Input & UI Setup
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed and input.KeyCode == Enum.KeyCode.LeftShift then
+        CameraScript.ToggleShiftLock()
+    end
 end)
 
--- Non-blocking startup wrappers to prevent early-joining race conditions
 task.spawn(function()
-	local player = Players.LocalPlayer
-	if not player then
-		Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
-		player = Players.LocalPlayer
-	end
-	local confirmedPlayer = player :: Player
-	
-	confirmedPlayer.CharacterAdded:Connect(startCamera)
-	confirmedPlayer.CharacterRemoving:Connect(stopCamera)
-	
-	if confirmedPlayer.Character then
-		startCamera()
-	end
+    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui") :: PlayerGui
+    local mainHUD = playerGui:WaitForChild("MainHUD", 5)
+    local buttons = mainHUD and mainHUD:WaitForChild("Buttons", 5)
+    local btn = buttons and buttons:WaitForChild("ShiftlockButton", 5) :: GuiButton?
+    
+    if btn then
+        btn.Activated:Connect(CameraScript.ToggleShiftLock)
+        btn.Visible = UserInputService.TouchEnabled
+    end
 end)
+
+-- Auto-Start Lifecycle
+task.spawn(function()
+    local player = Players.LocalPlayer
+    if not player then
+        Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+        player = Players.LocalPlayer
+    end
+    
+    local confirmedPlayer = player :: Player
+    
+    confirmedPlayer.CharacterAdded:Connect(function() CameraScript.Start() end)
+    confirmedPlayer.CharacterRemoving:Connect(function() CameraScript.Stop() end)
+    
+    if confirmedPlayer.Character then 
+        CameraScript.Start() 
+    end
+end)
+
+return CameraScript
