@@ -1,9 +1,9 @@
 --!strict
+--!native
 --[[
-    ControlPC Module (Updated)
-    - Inverted W/S movement logic.
-    - Continuous/Single Jump logic via Spacebar.
-    - Optimized for Luau and memory safety.
+    ControlPC Module (Fixed Jump)
+    - Zero idle CPU usage.
+    - Fixed infinite jumping bug.
 ]]
 
 local UserInputService = game:GetService("UserInputService")
@@ -12,7 +12,6 @@ local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local GuiService = game:GetService("GuiService")
 
--- TYPES
 export type ControlPC = {
 	Enable: (self: ControlPC) -> (),
 	Disable: (self: ControlPC) -> (),
@@ -25,7 +24,6 @@ type InputState = {
 	Right: number,
 }
 
--- CONSTANTS
 local MOVE_KEYS: { [Enum.KeyCode]: string } = {
 	[Enum.KeyCode.W] = "Backward",
 	[Enum.KeyCode.S] = "Forward",
@@ -33,26 +31,65 @@ local MOVE_KEYS: { [Enum.KeyCode]: string } = {
 	[Enum.KeyCode.D] = "Right",
 }
 
--- MICRO-OPTIMIZATIONS
-local V3_NEW = Vector3.new
-local V3_ZERO = Vector3.zero
-
--- PRIVATE STATE
-local _player = (Players.LocalPlayer or Players:GetPropertyChangedSignal("LocalPlayer"):Wait()) :: Player -- Cast to Player to resolve strict typing warnings
+local _player = (Players.LocalPlayer or Players:GetPropertyChangedSignal("LocalPlayer"):Wait()) :: Player
 local _activeConnections: { RBXScriptConnection } = {}
+local _updateConnection: RBXScriptConnection? = nil
+
 local _isJumping = false
-local _inputState: InputState = {
-	Forward = 0,
-	Backward = 0,
-	Left = 0,
-	Right = 0,
-}
+local _cachedHumanoid: Humanoid? = nil
+local _inputState: InputState = { Forward = 0, Backward = 0, Left = 0, Right = 0 }
 
 local ControlPC = {} :: ControlPC
 
--- PRIVATE FUNCTIONS
+local function updateCharacterCache(character: Model)
+	_cachedHumanoid = character:WaitForChild("Humanoid") :: Humanoid
+end
 
---[[ Resets all active inputs back to 0 ]]
+local function shouldUpdate(): boolean
+	return _isJumping or _inputState.Forward > 0 or _inputState.Backward > 0 or _inputState.Left > 0 or _inputState.Right > 0
+end
+
+local function onUpdate(): ()
+	if not _cachedHumanoid then return end
+
+	-- NAPRAWA: Zawsze przypisujemy aktualny stan (włącza i wyłącza skok)
+	_cachedHumanoid.Jump = _isJumping
+
+	local camera = Workspace.CurrentCamera
+	local moveDirection = Vector3.new(
+		_inputState.Right - _inputState.Left,
+		0,
+		_inputState.Backward - _inputState.Forward
+	)
+
+	if moveDirection.Magnitude > 0 and camera then
+		local camCFrame = camera.CFrame
+		local forward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
+		local right = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
+
+		_cachedHumanoid:Move((forward * moveDirection.Z) + (right * moveDirection.X), false)
+	else
+		_cachedHumanoid:Move(Vector3.zero, false)
+	end
+end
+
+local function evaluateUpdateLoop(): ()
+	if shouldUpdate() then
+		if not _updateConnection then
+			_updateConnection = RunService.PreSimulation:Connect(onUpdate)
+		end
+	else
+		if _updateConnection then
+			_updateConnection:Disconnect()
+			_updateConnection = nil
+			if _cachedHumanoid then
+				_cachedHumanoid:Move(Vector3.zero, false)
+				_cachedHumanoid.Jump = false -- NAPRAWA: Zerowanie skoku przy usypianiu skryptu
+			end
+		end
+	end
+end
+
 local function resetInputState(): ()
 	_isJumping = false
 	_inputState.Forward = 0
@@ -60,84 +97,45 @@ local function resetInputState(): ()
 	_inputState.Left = 0
 	_inputState.Right = 0
 
-	local character = _player.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	if humanoid then
-		humanoid:Move(V3_ZERO, false)
-	end
+	evaluateUpdateLoop()
 end
 
---[[ Main update loop running on PreSimulation ]]
-local function onUpdate(): ()
-	local character = _player.Character
-	if not character then return end
-
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if not humanoid then return end
-
-	-- ROZWIĄZANIE DLA CCL: Przypisujemy bezpośrednio true/false
-	humanoid.Jump = _isJumping
-
-	-- Handle Movement
-	local camera = Workspace.CurrentCamera
-
-	local moveDirection = V3_NEW(
-		_inputState.Right - _inputState.Left,
-		0,
-		_inputState.Backward - _inputState.Forward
-	)
-
-	if moveDirection.Magnitude > 0 then
-		local camCFrame = camera.CFrame
-		local lookVector = camCFrame.LookVector
-		local rightVector = camCFrame.RightVector
-
-		local forward = V3_NEW(lookVector.X, 0, lookVector.Z).Unit
-		local right = V3_NEW(rightVector.X, 0, rightVector.Z).Unit
-
-		local finalDirection = (forward * moveDirection.Z) + (right * moveDirection.X)
-		
-		humanoid:Move(finalDirection, false)
-	else
-		humanoid:Move(V3_ZERO, false)
-	end
-end
-
---[[ Processes keyboard input for movement and jumping ]]
 local function handleInput(input: InputObject, isProcessed: boolean, active: number): ()
 	if isProcessed then return end
 	
 	local action = MOVE_KEYS[input.KeyCode]
 	if action then
 		(_inputState :: any)[action] = active
+		evaluateUpdateLoop()
 		return
 	end
 
 	if input.KeyCode == Enum.KeyCode.Space then
 		_isJumping = (active == 1)
+		evaluateUpdateLoop()
 	end
 end
-
--- PUBLIC METHODS
 
 function ControlPC:Enable(): ()
 	self:Disable()
 
-	-- Input Listeners
-	table.insert(_activeConnections, UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
-		handleInput(input, processed, 1)
+	if _player.Character then
+		task.spawn(updateCharacterCache, _player.Character)
+	end
+	table.insert(_activeConnections, _player.CharacterAdded:Connect(function(char)
+		task.spawn(updateCharacterCache, char)
+	end))
+	table.insert(_activeConnections, _player.CharacterRemoving:Connect(function()
+		_cachedHumanoid = nil
+		evaluateUpdateLoop()
 	end))
 
-	table.insert(_activeConnections, UserInputService.InputEnded:Connect(function(input: InputObject, processed: boolean)
-		handleInput(input, processed, 0)
-	end))
-
-	-- System overlays & Menu listeners to clear focus stuck states
+	table.insert(_activeConnections, UserInputService.InputBegan:Connect(function(input, processed) handleInput(input, processed, 1) end))
+	table.insert(_activeConnections, UserInputService.InputEnded:Connect(function(input, processed) handleInput(input, processed, 0) end))
 	table.insert(_activeConnections, GuiService.MenuOpened:Connect(resetInputState))
 	table.insert(_activeConnections, UserInputService.WindowFocusReleased:Connect(resetInputState))
 
-	-- Movement & Jump Loop
-	table.insert(_activeConnections, RunService.PreSimulation:Connect(onUpdate))
+	evaluateUpdateLoop()
 end
 
 function ControlPC:Disable(): ()
@@ -146,7 +144,13 @@ function ControlPC:Disable(): ()
 	end
 	table.clear(_activeConnections)
 
+	if _updateConnection then
+		_updateConnection:Disconnect()
+		_updateConnection = nil
+	end
+
 	resetInputState()
+	_cachedHumanoid = nil
 end
 
 return ControlPC

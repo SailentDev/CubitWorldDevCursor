@@ -5,6 +5,7 @@
 ]]
 
 local Players = game:GetService("Players")
+local task_defer = task.defer
 local task_spawn = task.spawn
 
 -- TYPES
@@ -59,7 +60,7 @@ end
 local function initialize(): ()
 	switchController(InputManager:GetDeviceType())
 	InputManager:OnDeviceChanged(function(newDevice: DeviceType)
-		task_spawn(switchController, newDevice)
+		task_defer(switchController, newDevice) -- Optimized: defer instead of spawn
 	end)
 end
 
