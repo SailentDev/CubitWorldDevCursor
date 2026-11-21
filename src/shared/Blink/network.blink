@@ -1,11 +1,15 @@
 option ClientOutput = "C:\Users\PC\Documents\CubitWorldDevCursor\src\shared\Blink\network_client.luau"
 option ServerOutput = "C:\Users\PC\Documents\CubitWorldDevCursor\src\shared\Blink\network_server.luau"
 
+-- ==========================================
+-- STRUKTURY (Structures)
+-- ==========================================
+
 struct SettingsUpdate {
     FOV: u8?,
     MusicVol: u8?,
     ShowFPS: boolean?,
-    GlobalShadows: boolean?
+    GlobalShadows: boolean
 }
 
 struct CurrencySyncData {
@@ -25,6 +29,22 @@ struct EggSyncData {
     eggName: string,
     amount: u32
 }
+
+struct PetSyncData {
+    uuid: string,
+    petName: string,
+    level: u16,
+    isRemoved: boolean?
+}
+
+struct EquippedPetInfo {
+    uuid: string,
+    petName: string
+}
+
+-- ==========================================
+-- EVENTY (Events)
+-- ==========================================
 
 event UpdateSettings {
     From: Client,
@@ -85,13 +105,6 @@ event RequestHatch {
     }
 }
 
-struct PetSyncData {
-    uuid: string,
-    petName: string,
-    level: u16,
-    isRemoved: boolean?
-}
-
 event SyncPets {
     From: Server,
     Type: Reliable,
@@ -108,11 +121,6 @@ event RequestEquip {
     }
 }
 
-struct EquippedPetInfo {
-    uuid: string,
-    petName: string
-}
-
 event SyncEquippedPets {
     From: Server,
     Type: Reliable,
@@ -121,4 +129,11 @@ event SyncEquippedPets {
         userId: f64,
         equippedPets: EquippedPetInfo[]
     }
+}
+
+-- NOWY EVENT
+event RequestInitialSync {
+    From: Client,
+    Type: Reliable,
+    Call: SingleAsync
 }

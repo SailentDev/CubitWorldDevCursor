@@ -15,19 +15,19 @@ local CharacterManager = require(Controllers:WaitForChild("CharacterManager"))
 local CameraScript = {}
 
 -- Constants
-local STARTING_ZOOM = 16 -- [TUTAJ] Domyślne oddalenie kamery po wejściu (zwiększone z 10)
-local STARTING_PITCH = math.rad(-4) -- [TUTAJ] Kąt startowy (0 to idealny poziom, im więcej, tym bardziej patrzy w dół. 10 to delikatny, naturalny kąt)
+local STARTING_ZOOM = 15
+local STARTING_PITCH = math.rad(-4) 
 
 local MIN_PITCH = math.rad(-70)
 local MAX_PITCH = math.rad(70)
 local MIN_ZOOM = 0.5
-local MAX_ZOOM = 28
+local MAX_ZOOM = 25
 local ZOOM_LERP_SPEED = 32
 local FOCUS_OFFSET = Vector3.new(0, 2, 0)
 local SHIFT_LOCK_OFFSET = Vector3.new(0, 0, 0)
-local SPHERE_RADIUS = 0.25
-local COLLISION_PADDING = 0.15
-local ORIGIN_EPSILON = 0.1
+local SPHERE_RADIUS = 0.4
+local COLLISION_PADDING = 0.1
+local ORIGIN_EPSILON = 0
 
 -- State
 local yaw: number = 0
@@ -38,6 +38,7 @@ local isShiftLocked: boolean = false
 local isRunning: boolean = false
 
 -- Cached Engine States & Instances (Micro-optimization)
+local activeCamera: Camera? = Workspace.CurrentCamera -- Optimized: Cache camera object directly
 local currentMouseBehavior: Enum.MouseBehavior = Enum.MouseBehavior.Default
 local currentMouseIconEnabled: boolean = true
 local cachedFilterArray: {Instance} = {}
@@ -47,6 +48,11 @@ local raycastParams = RaycastParams.new()
 raycastParams.CollisionGroup = "Camera"
 raycastParams.IgnoreWater = true
 raycastParams.RespectCanCollide = true
+
+-- Optimized: Watch for Camera changes globally
+Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+    activeCamera = Workspace.CurrentCamera
+end)
 
 local function resolveCollision(focus: Vector3, lookVector: Vector3, distance: number): Vector3
     if distance < 1e-4 then return focus end
@@ -126,10 +132,12 @@ local function onRenderStep(deltaTime: number)
     local cameraDistance = isFirstPerson and 0 or actualZoom
     local cameraPos = resolveCollision(focus, lookVector, cameraDistance)
     
-    -- 4. Apply to Camera
-    local camera = Workspace.CurrentCamera
+    -- 4. Apply to Camera (Optimized with cached camera & write reduction)
+    local camera = activeCamera
     if camera then
-        camera.CameraType = Enum.CameraType.Scriptable
+        if camera.CameraType ~= Enum.CameraType.Scriptable then
+            camera.CameraType = Enum.CameraType.Scriptable
+        end
         camera.CFrame = rotation + cameraPos 
         camera.Focus = CFrame.new(focus)
     end
@@ -153,10 +161,10 @@ function CameraScript.Start()
         CharacterManager.SetCharacter(character)
     end
     
-    local camera = Workspace.CurrentCamera
+    local camera = activeCamera
     if camera then
         local _, cy, _ = camera.CFrame:ToEulerAnglesYXZ()
-        pitch = STARTING_PITCH -- Wymuszamy kontrolowany, ładny kąt startowy zamiast domyślnego rzutu w dół
+        pitch = STARTING_PITCH 
         yaw = cy
         targetZoom = STARTING_ZOOM
         actualZoom = STARTING_ZOOM
@@ -177,7 +185,7 @@ function CameraScript.Stop()
     CharacterManager.SetCharacter(nil)
     
     if isShiftLocked then CameraScript.ToggleShiftLock() end
-    if Workspace.CurrentCamera then Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom end
+    if activeCamera then activeCamera.CameraType = Enum.CameraType.Custom end
 end
 
 -- Input & UI Setup

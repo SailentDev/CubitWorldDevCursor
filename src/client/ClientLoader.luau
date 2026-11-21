@@ -75,7 +75,9 @@ function ClientLoader.Boot()
 	for _, name in moduleNamesOrder do
 		local module = loadedModules[name]
 		if type(module.OnInit) == "function" then
-			local success, err = pcall(module.OnInit)
+			local success, err = pcall(function(): any
+				return module.OnInit()
+			end)
 			if success then
 				print(`  ✔️ {name} -> zainicjalizowany (OnInit)`)
 			else
@@ -90,7 +92,9 @@ function ClientLoader.Boot()
 		local module = loadedModules[name]
 		if type(module.OnStart) == "function" then
 			task.spawn(function()
-				local success, err = pcall(module.OnStart)
+				local success, err = pcall(function(): any
+					return module.OnStart()
+				end)
 				if success then
 					print(`  ✔️ {name} -> wystartowany (OnStart)`)
 				else

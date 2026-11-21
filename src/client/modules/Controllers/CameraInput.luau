@@ -2,13 +2,11 @@
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
--- 1. Explicitly define the module's type to force Luau to recognize the functions
 export type CameraInputModule = {
 	GetDeltas: () -> (number, number, number),
 	IsDragging: () -> boolean
 }
 
--- 2. Apply the type to the table
 local CameraInput = {} :: CameraInputModule
 
 -- Primitive State
@@ -52,28 +50,25 @@ function CameraInput.GetDeltas(): (number, number, number)
 	return y, p, z
 end
 
--- Expose dragging state to avoid polling UserInputService in RenderStep
 function CameraInput.IsDragging(): boolean
 	return isDragging
 end
 
 UserInputService.InputBegan:Connect(function(input: InputObject, gameProcessed: boolean)
-	if gameProcessed then return end -- Ignore clicks on UI elements
+	if gameProcessed then return end 
 	
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
 		isDragging = true
 	elseif input.UserInputType == Enum.UserInputType.Touch then
-		if input.Position.X <= cachedViewportWidth * 0.5 then return end -- Ignore movement thumbstick zone
+		if input.Position.X <= cachedViewportWidth * 0.5 then return end 
 		
-		-- O(1) Zero-allocation touch tracking
 		if not touch1 then
 			touch1 = input
 		elseif not touch2 then
 			touch2 = input
 			local t1 = touch1 :: InputObject
-			local dx = t1.Position.X - input.Position.X
-			local dy = t1.Position.Y - input.Position.Y
-			lastPinchDistance = math.sqrt(dx * dx + dy * dy)
+            -- Optimized: SIMD-ready native vector subtraction and magnitude lookup
+            lastPinchDistance = (t1.Position - input.Position).Magnitude
 		end
 	end
 end)
@@ -90,7 +85,6 @@ UserInputService.InputEnded:Connect(function(input: InputObject, _gameProcessed:
 			lastPinchDistance = 0
 		end
 		
-		-- Shift touch2 to touch1 if the primary finger was released
 		if not touch1 and touch2 then
 			touch1 = touch2
 			touch2 = nil
@@ -114,9 +108,8 @@ UserInputService.InputChanged:Connect(function(input: InputObject, _gameProcesse
 			local t1 = touch1 :: InputObject
 			local t2 = touch2 :: InputObject
 			
-			local dx = t1.Position.X - t2.Position.X
-			local dy = t1.Position.Y - t2.Position.Y
-			local dist = math.sqrt(dx * dx + dy * dy)
+            -- Optimized: Native vector magnitude lookup
+            local dist = (t1.Position - t2.Position).Magnitude
 			
 			if lastPinchDistance > 0 then
 				zoomDelta -= (dist - lastPinchDistance) * PINCH_SENSITIVITY

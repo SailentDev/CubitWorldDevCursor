@@ -2,7 +2,7 @@
 local CharacterManager = {}
 
 local cachedParts: { BasePart } = {}
-local isToolPart: { [BasePart]: boolean } = {} -- Szybki cache O(1) zapobiegający lagom
+local isToolPart: { [BasePart]: boolean } = {} 
 
 local descendantAddedConn: RBXScriptConnection?
 local descendantRemovingConn: RBXScriptConnection?
@@ -11,20 +11,25 @@ local currentCharacter: Model?
 -- Micro-optimization: File-level caches
 local cachedHumanoid: Humanoid? = nil 
 local cachedRootPart: BasePart? = nil
+local currentTransparencyState: number? = nil -- Optimized: Cache transparency state to avoid redundant writes
 
 local function onDescendantAdded(descendant: Instance)
     if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then
         local part = descendant :: BasePart
         table.insert(cachedParts, part)
-        -- Szukamy Toolda TYLKO RAZ przy dodaniu części, oszczędzając masę CPU co klatkę
         isToolPart[part] = descendant:FindFirstAncestorOfClass("Tool") ~= nil
+        
+        -- Optimized: Apply current active transparency to newly added parts instantly
+        if currentTransparencyState and not isToolPart[part] then
+            part.LocalTransparencyModifier = currentTransparencyState
+        end
     end
 end
 
 local function onDescendantRemoving(descendant: Instance)
     if descendant:IsA("BasePart") then
         local part = descendant :: BasePart
-        isToolPart[part] = nil -- Zapobieganie wyciekom pamięci
+        isToolPart[part] = nil 
         
         local index = table.find(cachedParts, part)
         if index then
@@ -43,6 +48,7 @@ function CharacterManager.SetCharacter(character: Model?)
     if descendantRemovingConn then descendantRemovingConn:Disconnect() end
     table.clear(cachedParts)
     table.clear(isToolPart)
+    currentTransparencyState = nil -- Reset state cache
     
     if character then
         cachedHumanoid = character:FindFirstChildOfClass("Humanoid") :: Humanoid?
@@ -73,7 +79,6 @@ function CharacterManager.Update(isFirstPerson: boolean, shouldRotateCharacter: 
             local flatLook = Vector3.new(lookVector.X, 0, lookVector.Z)
             if flatLook.Magnitude > 1e-4 then
                 flatLook = flatLook.Unit
-                -- Wysoce zoptymalizowana macierz rotacji (pomija lookAt)
                 local right = Vector3.new(-flatLook.Z, 0, flatLook.X)
                 local up = Vector3.new(0, 1, 0)
                 rootPart.CFrame = CFrame.fromMatrix(rootPart.Position, right, up, -flatLook)
@@ -81,12 +86,15 @@ function CharacterManager.Update(isFirstPerson: boolean, shouldRotateCharacter: 
         end
     end
     
-    -- Pętla wymuszona przez silnik Roblox co klatkę, ale z błyskawicznym odczytem ze słownika
-    local transparency = isFirstPerson and 1 or 0
-    for i = 1, #cachedParts do
-        local part = cachedParts[i]
-        if not isToolPart[part] then 
-            part.LocalTransparencyModifier = transparency
+    -- Optimized: Only update part transparency when the actual state changes
+    local targetTransparency = isFirstPerson and 1 or 0
+    if currentTransparencyState ~= targetTransparency then
+        currentTransparencyState = targetTransparency
+        for i = 1, #cachedParts do
+            local part = cachedParts[i]
+            if not isToolPart[part] then 
+                part.LocalTransparencyModifier = targetTransparency
+            end
         end
     end
 end
