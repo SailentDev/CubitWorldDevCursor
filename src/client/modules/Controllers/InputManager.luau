@@ -1,15 +1,14 @@
--- script: modules/controllers/InputManager.luau
 --!strict
--- Removed --!native as it provides no benefit here and wastes memory
-
 local UserInputService = game:GetService("UserInputService")
 
 export type DeviceType = "PC" | "Phone"
-type DeviceChangedCallback = (newDevice: DeviceType) -> ()
+export type DeviceChangedCallback = (newDevice: DeviceType) -> ()
+export type InputManagerModule = {
+	GetDeviceType: (self: InputManagerModule) -> DeviceType,
+	OnDeviceChanged: (self: InputManagerModule, callback: DeviceChangedCallback) -> (() -> ()),
+}
 
 local InputManager = {}
-local _currentDevice: DeviceType = "PC"
-local _listeners: { DeviceChangedCallback } = {}
 
 local PC_INPUT_TYPES: { [Enum.UserInputType]: boolean } = {
 	[Enum.UserInputType.Keyboard] = true,
@@ -20,32 +19,54 @@ local PC_INPUT_TYPES: { [Enum.UserInputType]: boolean } = {
 	[Enum.UserInputType.MouseMovement] = true,
 }
 
-local function _calculateDeviceType(recentInput: Enum.UserInputType?): DeviceType
-	if recentInput == Enum.UserInputType.Touch then return "Phone" end
-	if recentInput and PC_INPUT_TYPES[recentInput] then return "PC" end
-	if UserInputService.KeyboardEnabled or UserInputService.MouseEnabled then return "PC" end
+local currentDevice: DeviceType = "PC"
+local listeners: { DeviceChangedCallback } = {}
+
+local function calculateDeviceType(recentInput: Enum.UserInputType?): DeviceType?
+	if recentInput == Enum.UserInputType.Touch then
+		return "Phone"
+	end
+	if recentInput and PC_INPUT_TYPES[recentInput] then
+		return "PC"
+	end
+	return nil
+end
+
+local function getInitialDeviceType(): DeviceType
+	local detected = calculateDeviceType(UserInputService:GetLastInputType())
+	if detected then
+		return detected
+	end
+	if UserInputService.KeyboardEnabled or UserInputService.MouseEnabled then
+		return "PC"
+	end
 	return "Phone"
 end
 
 function InputManager:GetDeviceType(): DeviceType
-	return _currentDevice
+	return currentDevice
 end
 
-function InputManager:OnDeviceChanged(callback: DeviceChangedCallback): ()
-	table.insert(_listeners, callback)
-end
-
-do
-	_currentDevice = _calculateDeviceType(UserInputService:GetLastInputType())
-	UserInputService.LastInputTypeChanged:Connect(function(inputType: Enum.UserInputType)
-		local newDevice: DeviceType = _calculateDeviceType(inputType)
-		if newDevice ~= _currentDevice then
-			_currentDevice = newDevice
-			for _, callback in _listeners do
-				task.defer(callback, _currentDevice) -- Optimized: defer is better for event propagation
-			end
+function InputManager:OnDeviceChanged(callback: DeviceChangedCallback): () -> ()
+	table.insert(listeners, callback)
+	return function()
+		local idx = table.find(listeners, callback)
+		if idx then
+			table.remove(listeners, idx)
 		end
-	end)
+	end
 end
 
-return InputManager
+currentDevice = getInitialDeviceType()
+
+UserInputService.LastInputTypeChanged:Connect(function(inputType: Enum.UserInputType)
+	local newDevice = calculateDeviceType(inputType)
+	if newDevice and newDevice ~= currentDevice then
+		currentDevice = newDevice
+		for _, callback in table.clone(listeners) do
+			task.defer(callback, currentDevice)
+		end
+	end
+end)
+
+return InputManager :: InputManagerModule

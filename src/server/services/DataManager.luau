@@ -1,23 +1,27 @@
 --!strict
-local Players = game:GetService("Players")
-local ServerScriptService = game:GetService("ServerScriptService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local ProfileStore = require(ServerScriptService.services.ProfileStore)
+local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
+local PetDatabase = require(ReplicatedStorage.Shared.PetDatabase)
 local Types = require(ReplicatedStorage.Shared.Types)
 
-local PetDatabase = require(ReplicatedStorage.Shared.PetDatabase)
+local ProfileStore = require(ServerScriptService.services.ProfileStore)
 local RegionTracker = require(ServerScriptService.services.RegionTracker)
-local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
 
 local DataManager = {}
 
+type ProfileEventCallback = (player: Player, profile: Types.PlayerProfile) -> ()
+
 local CURRENT_DATA_VERSION = 1
+local STARTING_COINS = 0 -- Set to 500+ locally if testing shop purchases without a coin source
+local PROFILE_STORE_NAME = "Production_PlayerProfiles_v98989823"
 
 local DEFAULT_DATA: Types.ProfileData = {
 	DataVersion = CURRENT_DATA_VERSION,
-	Coins = 99999999,
+	Coins = STARTING_COINS,
 	Pets = {},
 	Eggs = {},
 	EquippedPets = {},
@@ -29,190 +33,216 @@ local DEFAULT_DATA: Types.ProfileData = {
 	},
 }
 
-local activeProfiles: { [Player]: any } = {}
-local profileStore = ProfileStore.New("Production_PlayerProfiles_v98989823", DEFAULT_DATA)
+local activeProfiles: { [Player]: Types.PlayerProfile } = {}
+local syncedPlayers: { [Player]: boolean } = {}
+local pendingInitialSync: { [Player]: boolean } = {}
+local profileLoadedCallbacks: { ProfileEventCallback } = {}
+local initialSyncCallbacks: { ProfileEventCallback } = {}
 
--- ==================== MIGROWANIE DANYCH ====================
-local function MigrateProfileData(data: any)
-	if not data.DataVersion then
-		data.DataVersion = 0
-	end
+local profileStore = ProfileStore.New(PROFILE_STORE_NAME, DEFAULT_DATA)
 
-	if data.DataVersion < 1 then
-		if data.Pets then
+local function migrateProfileData(rawData: { [string]: unknown }): ()
+	local dataVersion = if typeof(rawData.DataVersion) == "number" then rawData.DataVersion else 0
+
+	if dataVersion < 1 then
+		local rawPets = rawData.Pets
+		if typeof(rawPets) == "table" then
+			local petsTable = rawPets :: { [string]: unknown }
 			local oldPetsToMigrate: { [string]: number } = {}
-			
-			for key, value in pairs(data.Pets) do
-				if type(value) == "number" or (type(value) == "table" and value.petName == nil) then
-					local petName = tostring(key)
-					local amount = type(value) == "number" and value or (value.amount or 1)
-					oldPetsToMigrate[petName] = amount
-				end
-			end
-			
-			for petName, amount in pairs(oldPetsToMigrate) do
-				data.Pets[petName] = nil 
-				for i = 1, amount do
-					local newUUID = HttpService:GenerateGUID(false)
-					data.Pets[newUUID] = {
-						petName = petName,
-						level = 1
-					}
-				end
-			end
-			
-			for petUUID, petData in pairs(data.Pets) do
-				if type(petData) == "table" and petData.petName then
-					local petInfo = PetDatabase.GetPetInfo(petData.petName)
-					if not petInfo then
-						petData.petName = "Pyrodon"
+
+			for key, value in petsTable do
+				if typeof(value) == "number" then
+					oldPetsToMigrate[tostring(key)] = math.max(0, math.floor(value))
+				elseif typeof(value) == "table" then
+					local petEntry = value :: { [string]: unknown }
+					if petEntry.petName == nil then
+						local amount = if typeof(petEntry.amount) == "number" then math.max(0, math.floor(petEntry.amount)) else 1
+						oldPetsToMigrate[tostring(key)] = amount
 					end
 				end
 			end
-		end
-		data.DataVersion = 1
-	end
-end
 
--- ==================== SYNCHRONIZACJA DANYCH ====================
-function DataManager:SyncPlayerData(player: Player)
-	local profile = activeProfiles[player]
-	if not profile then return end
-
-	print(string.format("[DATA -> SYNC] Synchronizacja danych dla: %s", player.Name))
-
-	-- 1. Wysyłamy dane do gracza, który dołączył
-	Blink.SyncSettings.Fire(player, profile.Data.Settings)
-	Blink.SyncRegion.Fire(player, RegionTracker.GetRegion(player))
-	
-	Blink.SyncCurrency.Fire(player, {
-		currencyType = "Coins",
-		value = profile.Data.Coins or 0
-	})
-
-	if profile.Data.Eggs then
-		for eggName, amount in pairs(profile.Data.Eggs) do
-			Blink.SyncEggs.Fire(player, {
-				eggName = eggName,
-				amount = amount
-			})
-		end
-	end
-	
-	if profile.Data.Pets then
-		for petUUID, petData in pairs(profile.Data.Pets) do
-			Blink.SyncPets.Fire(player, {
-				isRemoved = false,
-				level = petData.level or 1,
-				petName = petData.petName,
-				uuid = petUUID
-			})
-		end
-	end
-
-	-- 2. Synchronizujemy pety WSZYSTKICH graczy na serwerze dla nowego gracza
-	for _, otherPlayer in ipairs(Players:GetPlayers()) do
-		local otherProfile = activeProfiles[otherPlayer]
-		if otherProfile and otherProfile.Data.EquippedPets then
-			local equippedPetsData = {}
-			for _, uuid in ipairs(otherProfile.Data.EquippedPets) do
-				local petData = otherProfile.Data.Pets[uuid]
-				if petData then
-					table.insert(equippedPetsData, {
-						uuid = uuid,
-						petName = petData.petName
-					})
+			for petName, amount in oldPetsToMigrate do
+				petsTable[petName] = nil
+				if PetDatabase.GetPetInfo(petName) then
+					for _ = 1, amount do
+						local newUUID = HttpService:GenerateGUID(false)
+						petsTable[newUUID] = {
+							petName = petName,
+							level = 1,
+						}
+					end
 				end
 			end
 
-			Blink.SyncEquippedPets.Fire(player, {
-				userId = otherPlayer.UserId,
-				equippedPets = equippedPetsData
+			-- Drop unregistered legacy pet IDs rather than granting invalid or high-tier defaults
+			for petUUID, petEntry in petsTable do
+				if typeof(petEntry) == "table" then
+					local typedEntry = petEntry :: { [string]: unknown }
+					local petName = typedEntry.petName
+					if typeof(petName) ~= "string" or not PetDatabase.GetPetInfo(petName) then
+						petsTable[petUUID] = nil
+					end
+				else
+					petsTable[petUUID] = nil
+				end
+			end
+		end
+
+		rawData.DataVersion = 1
+	end
+end
+
+function DataManager.OnProfileLoaded(callback: ProfileEventCallback): ()
+	table.insert(profileLoadedCallbacks, callback)
+end
+
+function DataManager.OnInitialSync(callback: ProfileEventCallback): ()
+	table.insert(initialSyncCallbacks, callback)
+end
+
+function DataManager:GetProfile(player: Player): Types.PlayerProfile?
+	local profile = activeProfiles[player]
+	if profile and profile:IsActive() then
+		return profile
+	end
+	return nil
+end
+
+function DataManager:SyncPlayerData(player: Player): ()
+	if syncedPlayers[player] then
+		return
+	end
+
+	local profile = DataManager:GetProfile(player)
+	if not profile then
+		return
+	end
+
+	syncedPlayers[player] = true
+	pendingInitialSync[player] = nil
+
+	local settingsData = profile.Data.Settings
+	Blink.SyncSettings.Fire(player, {
+		FOV = settingsData.FOV,
+		MusicVol = settingsData.MusicVol,
+		ShowFPS = settingsData.ShowFPS,
+		GlobalShadows = settingsData.GlobalShadows,
+	})
+
+	Blink.SyncRegion.Fire(player, RegionTracker.GetRegion())
+
+	Blink.SyncCurrency.Fire(player, {
+		currencyType = "Coins",
+		value = profile.Data.Coins or 0,
+	})
+
+	for eggName, amount in profile.Data.Eggs do
+		if amount > 0 then
+			Blink.SyncEggs.Fire(player, {
+				eggName = eggName,
+				amount = amount,
 			})
 		end
 	end
-end
 
--- ==================== CYKL ŻYCIA GRACZA ====================
-local function onPlayerAdded(player: Player)
-	print(string.format("[DATA -> SESSION] Rozpoczynam wczytywanie profilu: %s", player.Name))
-	local profileKey = "Player_" .. player.UserId
-	local profile = profileStore:StartSessionAsync(profileKey, {})
+	for petUUID, petData in profile.Data.Pets do
+		Blink.SyncPets.Fire(player, {
+			isRemoved = false,
+			level = petData.level or 1,
+			petName = petData.petName,
+			uuid = petUUID,
+		})
+	end
 
-	if profile then
-		if player.Parent then
-			profile:Reconcile()
-			MigrateProfileData(profile.Data)
-
-			activeProfiles[player] = profile
-			print(string.format("[DATA -> SUCCESS] Profil gracza %s załadowany!", player.Name))
-
-			profile.OnSessionEnd:Connect(function()
-				print(string.format("[DATA -> RELEASE] Sesja zakończona dla: %s", player.Name))
-				activeProfiles[player] = nil
-				if player:IsDescendantOf(Players) then
-					player:Kick("Twoja sesja została zamknięta na serwerze.")
-				end
-			end)
-		else
-			profile:EndSession() 
-		end
-	else
-		player:Kick("Nie udało się pobrać danych profilu.")
+	for _, callback in initialSyncCallbacks do
+		task.spawn(callback, player, profile)
 	end
 end
 
-local function onPlayerRemoving(player: Player)
+local function onPlayerAdded(player: Player): ()
+	local profileKey = "Player_" .. tostring(player.UserId)
+	local rawProfile = profileStore:StartSessionAsync(profileKey, {})
+
+	if not rawProfile then
+		if player:IsDescendantOf(Players) then
+			player:Kick("Unable to load your player data. Please rejoin.")
+		end
+		return
+	end
+
+	if not player:IsDescendantOf(Players) then
+		rawProfile:EndSession()
+		return
+	end
+
+	local profile = (rawProfile :: unknown) :: Types.PlayerProfile
+	profile:AddUserId(player.UserId)
+	profile:Reconcile()
+	migrateProfileData((profile.Data :: unknown) :: { [string]: unknown })
+
+	activeProfiles[player] = profile
+
+	profile.OnSessionEnd:Connect(function()
+		activeProfiles[player] = nil
+		syncedPlayers[player] = nil
+		pendingInitialSync[player] = nil
+
+		if player:IsDescendantOf(Players) then
+			player:Kick("Your session was ended on this server.")
+		end
+	end)
+
+	for _, callback in profileLoadedCallbacks do
+		callback(player, profile)
+	end
+
+	if pendingInitialSync[player] then
+		DataManager:SyncPlayerData(player)
+	end
+end
+
+local function onPlayerRemoving(player: Player): ()
+	syncedPlayers[player] = nil
+	pendingInitialSync[player] = nil
+
 	local profile = activeProfiles[player]
 	if profile then
 		activeProfiles[player] = nil
 		profile:EndSession()
-		print(string.format("[DATA -> REMOVING SUCCESS] Zakończono sesję dla: %s", player.Name))
 	end
 end
 
-function DataManager:GetProfile(player: Player): any
-	return activeProfiles[player]
+function DataManager.OnInit(): ()
 end
 
-function DataManager.OnInit()
-	print("[DATA] DataManager.OnInit uruchomiony.")
-end
-
-function DataManager.OnStart()
+function DataManager.OnStart(): ()
 	Players.PlayerAdded:Connect(onPlayerAdded)
 	Players.PlayerRemoving:Connect(onPlayerRemoving)
 
-	-- Nasłuchiwanie Blink z użyciem metody .On()
 	Blink.RequestInitialSync.On(function(player: Player)
-		local timeout = 5
-		local startTime = os.clock()
-		while not DataManager:GetProfile(player) and player.Parent and (os.clock() - startTime) < timeout do
-			task.wait(0.1)
+		if syncedPlayers[player] then
+			return
 		end
-		DataManager:SyncPlayerData(player)
+
+		if activeProfiles[player] then
+			DataManager:SyncPlayerData(player)
+		elseif player:IsDescendantOf(Players) then
+			pendingInitialSync[player] = true
+		end
 	end)
 
-	for _, player in ipairs(Players:GetPlayers()) do
+	RegionTracker.OnRegionResolved(function(resolvedRegion: string)
+		for player, _ in syncedPlayers do
+			if player:IsDescendantOf(Players) then
+				Blink.SyncRegion.Fire(player, resolvedRegion)
+			end
+		end
+	end)
+
+	for _, player in Players:GetPlayers() do
 		task.spawn(onPlayerAdded, player)
 	end
-
-	-- BEZPIECZNE ZAMYKANIE SERWERA
-	game:BindToClose(function()
-		print("[DATA] Zamykanie serwera - trwa zapisywanie danych graczy...")
-		for player, profile in pairs(activeProfiles) do
-			task.spawn(function()
-				profile:EndSession()
-			end)
-		end
-
-		local timeout = 10
-		local startTime = os.clock()
-		while next(activeProfiles) ~= nil and (os.clock() - startTime) < timeout do
-			task.wait(0.1)
-		end
-		print("[DATA] Wszystkie dane zostały bezpiecznie zapisane w DataStore.")
-	end)
 end
 
 return DataManager

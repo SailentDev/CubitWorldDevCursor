@@ -9,7 +9,7 @@ struct SettingsUpdate {
     FOV: u8?,
     MusicVol: u8?,
     ShowFPS: boolean?,
-    GlobalShadows: boolean
+    GlobalShadows: boolean?
 }
 
 struct CurrencySyncData {
@@ -115,7 +115,7 @@ event SyncPets {
 event RequestEquip {
     From: Client,
     Type: Reliable,
-    Call: SingleSync,
+    Call: SingleAsync,
     Data: struct {
         uuid: string
     }
@@ -124,14 +124,13 @@ event RequestEquip {
 event SyncEquippedPets {
     From: Server,
     Type: Reliable,
-    Call: SingleSync,
+    Call: SingleAsync,
     Data: struct {
         userId: f64,
         equippedPets: EquippedPetInfo[]
     }
 }
 
--- NOWY EVENT
 event RequestInitialSync {
     From: Client,
     Type: Reliable,

@@ -1,112 +1,137 @@
 --!strict
-local StarterPlayerScripts = script.Parent
-local modulesFolder = StarterPlayerScripts:WaitForChild("modules") :: Folder
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Blink = require(ReplicatedStorage.Shared.Blink.network_client)
+
+local starterPlayerScripts = script.Parent :: Instance
+local modulesFolder = starterPlayerScripts:WaitForChild("modules") :: Folder
 local uiFolder = modulesFolder:WaitForChild("ui") :: Folder
 local inventoryFolder = modulesFolder:WaitForChild("Inventory") :: Folder
-local optimizationFolder = StarterPlayerScripts:WaitForChild("Optimization") :: Folder -- DODANE
+local optimizationFolder = starterPlayerScripts:WaitForChild("Optimization") :: Folder
 
 local ClientLoader = {}
 
 type ClientModule = {
 	OnInit: (() -> ())?,
 	OnStart: (() -> ())?,
-	[any]: any
 }
 
-function ClientLoader.Boot()
+type LoadedModule = {
+	name: string,
+	module: ClientModule,
+}
+
+local MODULE_PRIORITY: { [string]: number } = {
+	StatisticsTracker = 1,
+	SettingsClient = 2,
+	CurrencyClient = 3,
+	UIManager = 4,
+	PetClient = 5,
+	EggController = 6,
+	InventoryClient = 7,
+	ClientOptimization = 8,
+}
+
+local function getModulePriority(name: string): number
+	return MODULE_PRIORITY[name] or 100
+end
+
+local function collectModuleScripts(container: Folder, list: { ModuleScript }): ()
+	for _, child in container:GetChildren() do
+		if child:IsA("ModuleScript") then
+			table.insert(list, child)
+		end
+	end
+end
+
+function ClientLoader.Boot(): ()
 	local startTime = os.clock()
-	local modulesToLoad: {ModuleScript} = {}
-	
-	local loadedModules: { [string]: ClientModule } = {}
-	local moduleNamesOrder: {string} = {}
+	local modulesToLoad: { ModuleScript } = {}
+
+	collectModuleScripts(modulesFolder, modulesToLoad)
+	collectModuleScripts(uiFolder, modulesToLoad)
+	collectModuleScripts(inventoryFolder, modulesToLoad)
+	collectModuleScripts(optimizationFolder, modulesToLoad)
+
+	table.sort(modulesToLoad, function(a: ModuleScript, b: ModuleScript): boolean
+		local pa = getModulePriority(a.Name)
+		local pb = getModulePriority(b.Name)
+		if pa ~= pb then
+			return pa < pb
+		end
+		return a.Name < b.Name
+	end)
+
+	local initializedModules: { LoadedModule } = {}
 
 	print("==================================================")
-	print("[⚡ CLIENT BOOT] Uruchamianie dwufazowego loadera Cubit World...")
+	print("[CLIENT BOOT] Starting Cubit World client modules...")
 	print("==================================================")
 
-	-- 1. Zbierz moduły bezpośrednio z folderu 'modules'
-	for _, child in modulesFolder:GetChildren() do
-		if child:IsA("ModuleScript") then
-			table.insert(modulesToLoad, child)
-		end
-	end
-
-	-- 2. Zbierz moduły z subfolderu 'ui'
-	for _, child in uiFolder:GetChildren() do
-		if child:IsA("ModuleScript") then
-			table.insert(modulesToLoad, child)
-		end
-	end
-	
-	-- 3. Zbierz moduły z subfolderu 'Inventory'
-	for _, child in inventoryFolder:GetChildren() do
-		if child:IsA("ModuleScript") then
-			table.insert(modulesToLoad, child)
-		end
-	end
-
-	-- 4. Zbierz moduły z folderu 'Optimization' (NOWOŚĆ)
-	-- To załaduje TYLKO 'ClientOptimization', a zignoruje LocalScripts!
-	for _, child in optimizationFolder:GetChildren() do
-		if child:IsA("ModuleScript") then
-			table.insert(modulesToLoad, child)
-		end
-	end
-
-	-- Bezpieczne wykonanie require i rejestracja
+	-- Phase 1: Synchronous OnInit
 	for _, moduleScript in modulesToLoad do
-		local requireSuccess, module = pcall(require, moduleScript)
-
+		local requireSuccess, result = pcall(require, moduleScript)
 		if not requireSuccess then
-			warn(`[❌ CLIENT REQUIRE ERROR] Nie można załadować: '{moduleScript.Name}'! Powód: {module}`)
+			warn(`[CLIENT REQUIRE ERROR] Failed to load '{moduleScript.Name}': {tostring(result)}`)
 			continue
 		end
 
-		if type(module) == "table" then
-			loadedModules[moduleScript.Name] = module :: ClientModule
-			table.insert(moduleNamesOrder, moduleScript.Name)
-		else
-			warn(`[⚠️ CLIENT WARN] Moduł '{moduleScript.Name}' nie zwraca tabeli danych.`)
+		if typeof(result) ~= "table" then
+			warn(`[CLIENT WARN] Module '{moduleScript.Name}' did not return a table.`)
+			continue
 		end
-	end
 
-	-- FAZA 1: OnInit
-	print("[🔄 CLIENT PHASE 1] Uruchamianie fazy OnInit...")
-	for _, name in moduleNamesOrder do
-		local module = loadedModules[name]
-		if type(module.OnInit) == "function" then
-			local success, err = pcall(function(): any
-				return module.OnInit()
-			end)
-			if success then
-				print(`  ✔️ {name} -> zainicjalizowany (OnInit)`)
+		local clientModule = result :: ClientModule
+		local initFn = clientModule.OnInit
+
+		if typeof(initFn) == "function" then
+			local initSuccess, initErr = pcall(initFn)
+			if initSuccess then
+				print(`  [OnInit] {moduleScript.Name}`)
+				table.insert(initializedModules, {
+					name = moduleScript.Name,
+					module = clientModule,
+				})
 			else
-				warn(`  ❌ [OnInit Error] W module '{name}': {err}`)
+				warn(`  [OnInit Error] '{moduleScript.Name}': {tostring(initErr)}`)
 			end
+		else
+			table.insert(initializedModules, {
+				name = moduleScript.Name,
+				module = clientModule,
+			})
 		end
 	end
 
-	-- FAZA 2: OnStart
-	print("[🔄 CLIENT PHASE 2] Uruchamianie fazy OnStart...")
-	for _, name in moduleNamesOrder do
-		local module = loadedModules[name]
-		if type(module.OnStart) == "function" then
+	-- Phase 2: Parallel OnStart with completion barrier before InitialSync
+	local pendingStartCount = 0
+	for _, entry in initializedModules do
+		local onStartFn = entry.module.OnStart
+		if typeof(onStartFn) == "function" then
+			pendingStartCount += 1
 			task.spawn(function()
-				local success, err = pcall(function(): any
-					return module.OnStart()
-				end)
-				if success then
-					print(`  ✔️ {name} -> wystartowany (OnStart)`)
+				local startSuccess, startErr = pcall(onStartFn)
+				if startSuccess then
+					print(`  [OnStart] {entry.name}`)
 				else
-					warn(`  ❌ [OnStart Error] W module '{name}': {err}`)
+					warn(`  [OnStart Error] '{entry.name}': {tostring(startErr)}`)
 				end
+				pendingStartCount -= 1
 			end)
 		end
 	end
 
-	local totalTime = math.round((os.clock() - startTime) * 1000)
+	local waitDeadline = os.clock() + 10
+	while pendingStartCount > 0 and os.clock() < waitDeadline do
+		task.wait()
+	end
+
+	-- Fire initial sync only after all client Blink listeners are active
+	Blink.RequestInitialSync.Fire()
+
+	local totalMs = math.round((os.clock() - startTime) * 1000)
 	print("==================================================")
-	print(`[🚀 CLIENT READY] Dwufazowy boot zakończony sukcesem! Czas: {totalTime}ms`)
+	print(`[CLIENT READY] Boot completed in {totalMs}ms`)
 	print("==================================================")
 end
 

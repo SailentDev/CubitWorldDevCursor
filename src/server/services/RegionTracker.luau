@@ -4,85 +4,106 @@ local RunService = game:GetService("RunService")
 
 local RegionTracker = {}
 
--- Local Cache State
-local cachedRegion: string = "Loading..."
-local isFetched = false
+type RegionResolvedCallback = (region: string) -> ()
 
 type Endpoint = {
 	Url: string,
-	Extract: (data: any) -> string?
+	Extract: (data: { [string]: unknown }) -> string?,
 }
+
+local cachedRegion: string = "Loading..."
+local isResolved = false
+local resolvedCallbacks: { RegionResolvedCallback } = {}
+
+local function extractStringField(data: { [string]: unknown }, keys: { string }): string?
+	for _, key in keys do
+		local value = data[key]
+		if typeof(value) == "string" and #value > 0 then
+			return value
+		end
+	end
+	return nil
+end
 
 local API_ENDPOINTS: { Endpoint } = {
 	{
-		-- Target: ip-api.com (Extracts Country Name, e.g., "Germany")
-		Url = "http://ip-api.com/json/",
-		Extract = function(data: any)
-			return data.country or data.regionName or data.city
-		end
-	},
-	{
-		-- Target: ipwho.is (Extracts Country Name, e.g., "Germany")
 		Url = "https://ipwho.is/",
-		Extract = function(data: any)
-			return data.country or data.region or data.city
-		end
+		Extract = function(data: { [string]: unknown }): string?
+			return extractStringField(data, { "country", "region", "city" })
+		end,
 	},
 	{
-		-- Target: ipapi.co (Extracts Country Name, e.g., "Germany")
 		Url = "https://ipapi.co/json/",
-		Extract = function(data: any)
-			return data.country_name or data.region or data.city
-		end
-	}
+		Extract = function(data: { [string]: unknown }): string?
+			return extractStringField(data, { "country_name", "region", "city" })
+		end,
+	},
+	{
+		Url = "http://ip-api.com/json/",
+		Extract = function(data: { [string]: unknown }): string?
+			return extractStringField(data, { "country", "regionName", "city" })
+		end,
+	},
 }
 
--- Sequentially queries APIs until one successfully resolves the location
-local function fetchLocationAsync()
+local function notifyResolved(region: string): ()
+	for _, callback in resolvedCallbacks do
+		task.spawn(callback, region)
+	end
+	table.clear(resolvedCallbacks)
+end
+
+local function fetchLocationAsync(): ()
 	local successResolved = false
 
-	for _, endpoint in ipairs(API_ENDPOINTS) do
-		local success, response = pcall(function()
-			-- Request with a short timeout to prevent waiting too long on a rate-limited endpoint
+	for _, endpoint in API_ENDPOINTS do
+		local success, response = pcall(function(): string
 			return HttpService:GetAsync(endpoint.Url)
 		end)
 
-		if success and response then
-			local decodeSuccess, data = pcall(function()
+		if success and typeof(response) == "string" then
+			local decodeSuccess, decoded = pcall(function(): unknown
 				return HttpService:JSONDecode(response)
 			end)
 
-			if decodeSuccess and typeof(data) == "table" then
-				local resolvedValue = endpoint.Extract(data)
-				if resolvedValue and typeof(resolvedValue) == "string" and resolvedValue ~= "" then
+			if decodeSuccess and typeof(decoded) == "table" then
+				local resolvedValue = endpoint.Extract(decoded :: { [string]: unknown })
+				if resolvedValue then
 					cachedRegion = resolvedValue
 					successResolved = true
-					break -- Break loop immediately on successful API resolution
+					break
 				end
 			end
 		end
-		
-		-- Small delay to protect request pipelines from thread choking
+
 		task.wait(0.1)
 	end
 
-	-- Ultimate fallback if Roblox outbound server IPs are rate-limited globally
 	if not successResolved then
-		if RunService:IsStudio() then
-			cachedRegion = "Studio Mode"
-		else
-			cachedRegion = "Roblox Server"
-		end
+		cachedRegion = if RunService:IsStudio() then "Studio Mode" else "Roblox Server"
 	end
-	
-	isFetched = true
-end
 
--- Asynchronously dispatch API check sequence on startup
-task.spawn(fetchLocationAsync)
+	isResolved = true
+	notifyResolved(cachedRegion)
+end
 
 function RegionTracker.GetRegion(): string
 	return cachedRegion
+end
+
+function RegionTracker.OnRegionResolved(callback: RegionResolvedCallback): ()
+	if isResolved then
+		task.spawn(callback, cachedRegion)
+		return
+	end
+	table.insert(resolvedCallbacks, callback)
+end
+
+function RegionTracker.OnInit(): ()
+end
+
+function RegionTracker.OnStart(): ()
+	task.spawn(fetchLocationAsync)
 end
 
 return RegionTracker

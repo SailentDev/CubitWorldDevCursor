@@ -1,36 +1,28 @@
 --!strict
+local Types = require(script.Parent.Types)
+
 local EggDatabase = {}
 
-export type EggInfo = {
-	Name: string,
-	Price: number,
-	CurrencyType: string,
-	DropChances: { [string]: number }
-}
-
-local Database: { [string]: EggInfo } = {
-	["OriginEgg"] = {
+local Database: { [string]: Types.EggInfo } = {
+	OriginEgg = table.freeze({
 		Name = "Origin Egg",
-		Price = 500, 
-		CurrencyType = "Coins", 
-		DropChances = {
-			["Dog"] = 50.0,      
-			["Pyrodon"] = 50.0,   
-		}
-	},
+		Price = 500,
+		CurrencyType = "Coins" :: Types.CurrencyType,
+		LayoutOrder = 1,
+		DropChances = table.freeze({
+			Dog = 50.0,
+			Pyrodon = 50.0,
+		}),
+	}),
 }
 
-function EggDatabase.GetEggInfo(id: string): EggInfo?
-	print("[DATABASE] Zapytanie o dane jajka o ID: " .. tostring(id))
-	local info = Database[id]
-	if not info then
-		warn("[DATABASE] Nie znaleziono jajka o ID: " .. tostring(id))
-	end
-	return info
+table.freeze(Database)
+
+function EggDatabase.GetEggInfo(id: string): Types.EggInfo?
+	return Database[id]
 end
 
-function EggDatabase.GetAllEggs(): { [string]: EggInfo }
-	print("[DATABASE] Pobranie całej bazy danych jajek.")
+function EggDatabase.GetAllEggs(): { [string]: Types.EggInfo }
 	return Database
 end
 

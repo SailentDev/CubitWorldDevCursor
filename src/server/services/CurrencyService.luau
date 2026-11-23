@@ -1,107 +1,119 @@
 --!strict
-local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local DataManager = require(ServerScriptService.services.DataManager)
 local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
+local DataManager = require(ServerScriptService.services.DataManager)
+local Types = require(ReplicatedStorage.Shared.Types)
 
 local CurrencyService = {}
 
--- ==================== Loader lifecycle ====================
-function CurrencyService.OnInit()
-	print("[CURRENCY] OnInit: Inicjalizacja CurrencyService...")
+local VALID_CURRENCIES: { [string]: boolean } = {
+	Coins = true,
+}
+
+local function isValidAmount(amount: number): boolean
+	return typeof(amount) == "number"
+		and amount == amount -- NaN check
+		and amount > 0
+		and amount < math.huge
 end
 
-function CurrencyService.OnStart()
-	print("[CURRENCY] OnStart: Usługa walutowa gotowa do pracy.")
-end
-
--- ==================== Utility validation ====================
 local function validateParams(player: Player, amount: number, currencyType: string): boolean
-	if typeof(player) ~= "Instance" or not player:IsA("Player") then
-		warn("[CURRENCY -> VALIDATION] Invalid player argument")
+	if typeof(player) ~= "Instance" or not player:IsA("Player") or player.Parent == nil then
 		return false
 	end
-	
-	if typeof(amount) ~= "number" or amount <= 0 then
-		warn("[CURRENCY -> VALIDATION] Amount must be a positive number")
+
+	if not isValidAmount(amount) then
+		warn(`[CurrencyService] Invalid amount received: {tostring(amount)}`)
 		return false
 	end
-	
-	if typeof(currencyType) ~= "string" or #currencyType == 0 then
-		warn("[CURRENCY -> VALIDATION] currencyType must be a non‑empty string")
+
+	if typeof(currencyType) ~= "string" or not VALID_CURRENCIES[currencyType] then
+		warn(`[CurrencyService] Invalid currencyType: {tostring(currencyType)}`)
 		return false
 	end
-	
+
 	return true
 end
 
--- ==================== Public API ====================
+local function getBalance(profile: Types.PlayerProfile, currencyType: Types.CurrencyType): number
+	if currencyType == "Coins" then
+		return profile.Data.Coins or 0
+	end
+	return 0
+end
 
-function CurrencyService:HasEnoughCurrency(player: Player, amount: number, currencyType: string): boolean
-	print(string.format("[CURRENCY] Sprawdzanie portfela gracza %s: Wymagane %d %s", player.Name, amount, currencyType))
+local function setBalance(profile: Types.PlayerProfile, currencyType: Types.CurrencyType, newValue: number): ()
+	if currencyType == "Coins" then
+		profile.Data.Coins = newValue
+	end
+end
+
+function CurrencyService.OnInit(): ()
+end
+
+function CurrencyService.OnStart(): ()
+end
+
+function CurrencyService:HasEnoughCurrency(player: Player, amount: number, currencyType: Types.CurrencyType): boolean
 	if not validateParams(player, amount, currencyType) then
 		return false
 	end
-	
+
 	local profile = DataManager:GetProfile(player)
 	if not profile then
-		warn("[CURRENCY] Brak profilu danych dla gracza " .. player.Name)
 		return false
 	end
-	
-	local current: number = profile.Data[currencyType] or 0
-	local hasEnough = current >= amount
-	print(string.format("[CURRENCY] Gracz %s posiada: %d / %d %s. Wynik: %s", player.Name, current, amount, currencyType, tostring(hasEnough)))
-	return hasEnough
+
+	return getBalance(profile, currencyType) >= amount
 end
 
-function CurrencyService:AddCurrency(player: Player, amount: number, currencyType: string)
-	print(string.format("[CURRENCY] Próba dodania %d %s dla gracza %s", amount, currencyType, player.Name))
-	if not validateParams(player, amount, currencyType) then
-		return
-	end
-	
-	local profile = DataManager:GetProfile(player)
-	assert(profile, "Missing profile for player " .. player.Name)
-	
-	local newValue: number = (profile.Data[currencyType] or 0) + amount
-	profile.Data[currencyType] = newValue
-	print(string.format("[CURRENCY -> DATA SUCCESS] Nowy stan konta gracza %s: %d %s", player.Name, newValue, currencyType))
-	
-	-- POPRAWIONE: Pakujemy dane w tabelę (słownik) zgodnie ze strukturą CurrencySyncData
-	Blink.SyncCurrency.Fire(player, {
-		currencyType = currencyType,
-		value = newValue
-	})
-	print("[CURRENCY -> BLINK] Wysłano Blink.SyncCurrency do klienta.")
-end
-
-function CurrencyService:RemoveCurrency(player: Player, amount: number, currencyType: string): boolean
-	print(string.format("[CURRENCY] Próba pobrania %d %s od gracza %s", amount, currencyType, player.Name))
+function CurrencyService:AddCurrency(player: Player, amount: number, currencyType: Types.CurrencyType): boolean
 	if not validateParams(player, amount, currencyType) then
 		return false
 	end
-	
+
 	local profile = DataManager:GetProfile(player)
-	assert(profile, "Missing profile for player " .. player.Name)
-	
-	local current: number = profile.Data[currencyType] or 0
-	if current < amount then
-		warn(string.format("[CURRENCY -> FAIL] Za mało waluty! Posiada: %d, Wymagane: %d", current, amount))
+	if not profile then
 		return false
 	end
-	
-	local newValue: number = current - amount
-	profile.Data[currencyType] = newValue
-	print(string.format("[CURRENCY -> DATA SUCCESS] Pobrano pomyślnie. Nowy stan konta %s: %d %s", player.Name, newValue, currencyType))
-	
-	-- POPRAWIONE: Pakujemy dane w tabelę (słownik) zgodnie ze strukturą CurrencySyncData
+
+	local newValue = getBalance(profile, currencyType) + math.floor(amount)
+	setBalance(profile, currencyType, newValue)
+
 	Blink.SyncCurrency.Fire(player, {
 		currencyType = currencyType,
-		value = newValue
+		value = newValue,
 	})
-	print("[CURRENCY -> BLINK] Wysłano Blink.SyncCurrency (pobranie) do klienta.")
+
+	return true
+end
+
+function CurrencyService:RemoveCurrency(player: Player, amount: number, currencyType: Types.CurrencyType): boolean
+	if not validateParams(player, amount, currencyType) then
+		return false
+	end
+
+	local profile = DataManager:GetProfile(player)
+	if not profile then
+		return false
+	end
+
+	local cost = math.floor(amount)
+	local current = getBalance(profile, currencyType)
+	if current < cost then
+		return false
+	end
+
+	local newValue = current - cost
+	setBalance(profile, currencyType, newValue)
+
+	Blink.SyncCurrency.Fire(player, {
+		currencyType = currencyType,
+		value = newValue,
+	})
+
 	return true
 end
 

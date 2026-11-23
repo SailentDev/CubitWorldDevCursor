@@ -2,68 +2,61 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-
--- Import Blink
 local Blink = require(ReplicatedStorage.Shared.Blink.network_client)
 
 local CurrencyClient = {}
 
--- Funkcja pomocnicza do ładnego formatowania liczb (np. 10500 -> 10,500)
-local function formatNumber(value: number): string
-	local formatted = tostring(math.floor(value))
-	while true do  
-		local k
-		formatted, k = string.gsub(formatted, "^(-?%d+)(%d%d%d)", '%1,%2')
-		if k == 0 then break end
-	end
-	return formatted
-end
+local SUFFIXES = { "", "K", "M", "B", "T", "Qd", "Qn" }
 
 local function formatNumber(value: number): string
-	if value < 1000 then
-		return tostring(math.floor(value))
+	if value ~= value then
+		return "0"
+	end
+	if value >= math.huge then
+		return "Inf"
+	end
+	if value <= -math.huge then
+		return "-Inf"
 	end
 
-	local suffixes = {"", "K", "M", "B", "T", "Qd", "Qn"}
-	
-	-- Wyliczamy indeks skrótu
-	local i = math.floor(math.log10(value) / 3)
-	local shortValue = value / (10 ^ (i * 3))
-	
-	-- Ucinamy bezwzględnie do 3 miejsc po przecinku (widoczne tysiące i dziesiątki tysięcy)
+	local sign = if value < 0 then "-" else ""
+	local absValue = math.abs(value)
+
+	if absValue < 1000 then
+		return sign .. tostring(math.floor(absValue))
+	end
+
+	local index = math.floor(math.log10(absValue) / 3)
+	local suffix = SUFFIXES[index + 1]
+	if not suffix then
+		return sign .. "Inf"
+	end
+
+	local shortValue = absValue / (10 ^ (index * 3))
 	local cutValue = math.floor(shortValue * 1000) / 1000
-	
-	-- Formatujemy do tekstu z wymuszonymi 3 miejscami po przecinku (np. "999.999")
-	local formatted = string.format("%.3f", cutValue)
-	
-	-- Inteligentne usuwanie zbędnych zer z końca (np. "50.500" -> "50.5", a "100.000" -> "100")
-	formatted = string.gsub(formatted, "%.?0+$", "")
-	
-	local suffix = suffixes[i + 1] or "Inf"
-	return formatted .. suffix
+	local formatted = string.gsub(string.format("%.3f", cutValue), "%.?0+$", "")
+
+	return sign .. formatted .. suffix
 end
 
--- ==================== Loader lifecycle ====================
-function CurrencyClient.OnInit()
-	print("[CLIENT -> CURRENCY] Initialization (OnInit)...")
+function CurrencyClient.OnInit(): ()
 end
 
-function CurrencyClient.OnStart()
-	print("[CLIENT -> CURRENCY] Currency System Ready! (OnStart)")
-	
-	-- Referencje do UI (Pobierane w OnStart, żeby upewnić się, że MainHUD już istnieje)
-	local mainHUD = PlayerGui:WaitForChild("MainHUD") :: ScreenGui
-	local currencyFrame = mainHUD:WaitForChild("CurrencyFrame") :: Frame
-	local coinsLabel = currencyFrame:WaitForChild("CoinsLabel") :: TextLabel
+function CurrencyClient.OnStart(): ()
+	local localPlayer = Players.LocalPlayer :: Player
+	local playerGui = localPlayer:WaitForChild("PlayerGui") :: PlayerGui
+	local mainHUD = playerGui:WaitForChild("MainHUD", 10)
+	local currencyFrame = if mainHUD then mainHUD:WaitForChild("CurrencyFrame", 5) else nil
+	local coinsLabel = if currencyFrame then currencyFrame:WaitForChild("CoinsLabel", 5) else nil
 
-	-- ==================== SYNCHRONIZACJA WALUTY ====================
+	if not coinsLabel or not coinsLabel:IsA("TextLabel") then
+		warn("[CurrencyClient] CoinsLabel missing")
+		return
+	end
+
 	Blink.SyncCurrency.On(function(data: { currencyType: string, value: number })
-		-- Sprawdzamy, czy serwer przesłał akurat aktualizację monet
-		if data.currencyType == "Coins" then 
+		if data.currencyType == "Coins" then
 			coinsLabel.Text = "$" .. formatNumber(data.value)
-			print(string.format("[CLIENT -> CURRENCY] Zaktualizowano portfel: $%s", formatNumber(data.value)))
 		end
 	end)
 end

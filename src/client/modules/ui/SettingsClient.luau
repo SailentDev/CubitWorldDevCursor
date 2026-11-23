@@ -1,14 +1,22 @@
 --!strict
+local GuiService = game:GetService("GuiService")
+local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
-local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
 
-local Types = require(ReplicatedStorage.Shared.Types)
 local Blink = require(ReplicatedStorage.Shared.Blink.network_client)
+local Types = require(ReplicatedStorage.Shared.Types)
+
 local StatisticsTracker = require(script.Parent:WaitForChild("StatisticsTracker"))
 
 local SettingsClient = {}
+
+local COLOR_ENABLED = Color3.fromRGB(46, 204, 113)
+local COLOR_DISABLED = Color3.fromRGB(231, 76, 60)
+local SETTING_LOCK_DURATION = 1.2
+
 local isInitialized = false
 local isTrackerActive = false
 
@@ -19,120 +27,153 @@ local cachedSettings: Types.Settings = {
 	GlobalShadows = true,
 }
 
-local lastLocalUpdates: { [string]: number } = {}
-local SETTING_LOCK_DURATION = 1.2
+local lastLocalUpdates: { [Types.SettingKey]: number } = {}
 
 local settingsUpdatedSignal = Instance.new("BindableEvent")
 SettingsClient.SettingsUpdated = settingsUpdatedSignal.Event
 
--- Explicit optional type annotations for upvalues
-local fovFill: Frame?, fovController: Frame?, fovValueLabel: TextLabel?
-local musicFill: Frame?, musicController: Frame?, musicValueLabel: TextLabel?
-local shadowsButton: TextButton?, statisticsButton: TextButton?, StatisticsLabel: TextLabel?
+local fovFill: Frame? = nil
+local fovController: Frame? = nil
+local fovValueLabel: TextLabel? = nil
+local musicFill: Frame? = nil
+local musicController: Frame? = nil
+local musicValueLabel: TextLabel? = nil
+local shadowsButton: TextButton? = nil
+local statisticsButton: TextButton? = nil
+local statisticsLabel: TextLabel? = nil
 
-local COLOR_ENABLED = Color3.fromRGB(46, 204, 113)
-local COLOR_DISABLED = Color3.fromRGB(231, 76, 60)
+local function getSettingInternal(key: Types.SettingKey): number | boolean
+	if key == "FOV" then
+		return cachedSettings.FOV
+	elseif key == "MusicVol" then
+		return cachedSettings.MusicVol
+	elseif key == "ShowFPS" then
+		return cachedSettings.ShowFPS
+	else
+		return cachedSettings.GlobalShadows
+	end
+end
 
-local function applyEngineSettings()
-	local camera = workspace.CurrentCamera
+local function setNumberSetting(key: "FOV" | "MusicVol", value: number): ()
+	if key == "FOV" then
+		cachedSettings.FOV = value
+	else
+		cachedSettings.MusicVol = value
+	end
+end
+
+local function setBooleanSetting(key: "ShowFPS" | "GlobalShadows", value: boolean): ()
+	if key == "ShowFPS" then
+		cachedSettings.ShowFPS = value
+	else
+		cachedSettings.GlobalShadows = value
+	end
+end
+
+local function applyEngineSettings(): ()
+	local camera = Workspace.CurrentCamera
 	if camera then
 		camera.FieldOfView = cachedSettings.FOV
 	end
 	Lighting.GlobalShadows = cachedSettings.GlobalShadows
 end
 
-local function updateVisuals()
-	if not isInitialized then return end
-	
-	-- Cast optional upvalues to guaranteed types to satisfy strict type-checking
-	local fovFill = fovFill :: Frame
-	local fovController = fovController :: Frame
-	local fovValueLabel = fovValueLabel :: TextLabel
-	local musicFill = musicFill :: Frame
-	local musicController = musicController :: Frame
-	local musicValueLabel = musicValueLabel :: TextLabel
-	local shadowsButton = shadowsButton :: TextButton
-	local statisticsButton = statisticsButton :: TextButton
-	local StatisticsLabel = StatisticsLabel :: TextLabel
-	
-	-- FOV Progress Calculation
-	local fovPct = math.clamp((cachedSettings.FOV - 30) / 90, 0, 1)
-	fovFill.Size = UDim2.fromScale(fovPct, 1)
-	fovController.Position = UDim2.fromScale(fovPct, fovController.Position.Y.Scale)
-	fovValueLabel.Text = tostring(math.round(cachedSettings.FOV))
+local function updateVisuals(): ()
+	if not isInitialized then
+		return
+	end
 
-	-- Music Progress Calculation
-	local musicPct = math.clamp(cachedSettings.MusicVol / 100, 0, 1)
-	musicFill.Size = UDim2.fromScale(musicPct, 1)
-	musicController.Position = UDim2.fromScale(musicPct, musicController.Position.Y.Scale)
-	musicValueLabel.Text = tostring(math.round(cachedSettings.MusicVol))
+	if fovFill and fovController and fovValueLabel then
+		local fovPct = math.clamp((cachedSettings.FOV - 30) / 90, 0, 1)
+		fovFill.Size = UDim2.fromScale(fovPct, 1)
+		fovController.Position = UDim2.fromScale(fovPct, fovController.Position.Y.Scale)
+		fovValueLabel.Text = tostring(math.round(cachedSettings.FOV))
+	end
 
-	-- Standard toggles updates
-	shadowsButton.BackgroundColor3 = if cachedSettings.GlobalShadows then COLOR_ENABLED else COLOR_DISABLED
-	statisticsButton.BackgroundColor3 = if cachedSettings.ShowFPS then COLOR_ENABLED else COLOR_DISABLED
+	if musicFill and musicController and musicValueLabel then
+		local musicPct = math.clamp(cachedSettings.MusicVol / 100, 0, 1)
+		musicFill.Size = UDim2.fromScale(musicPct, 1)
+		musicController.Position = UDim2.fromScale(musicPct, musicController.Position.Y.Scale)
+		musicValueLabel.Text = tostring(math.round(cachedSettings.MusicVol))
+	end
 
-	-- Manage performance statistics lifecycle
-	if cachedSettings.ShowFPS then
-		StatisticsLabel.Visible = true
-		if not isTrackerActive then
-			isTrackerActive = true
-			StatisticsTracker.Start(StatisticsLabel)
-		end
-	else
-		StatisticsLabel.Visible = false
-		if isTrackerActive then
-			isTrackerActive = false
-			StatisticsTracker.Stop()
+	if shadowsButton then
+		shadowsButton.BackgroundColor3 = if cachedSettings.GlobalShadows then COLOR_ENABLED else COLOR_DISABLED
+	end
+	if statisticsButton then
+		statisticsButton.BackgroundColor3 = if cachedSettings.ShowFPS then COLOR_ENABLED else COLOR_DISABLED
+	end
+
+	if statisticsLabel then
+		if cachedSettings.ShowFPS then
+			statisticsLabel.Visible = true
+			if not isTrackerActive then
+				isTrackerActive = true
+				StatisticsTracker.Start(statisticsLabel)
+			end
+		else
+			statisticsLabel.Visible = false
+			if isTrackerActive then
+				isTrackerActive = false
+				StatisticsTracker.Stop()
+			end
 		end
 	end
 
 	applyEngineSettings()
 end
 
-function SettingsClient.GetSetting(settingName: string): any
-	return cachedSettings[settingName]
+function SettingsClient.GetSetting(settingName: Types.SettingKey): number | boolean
+	return getSettingInternal(settingName)
 end
 
-function SettingsClient.UpdateSetting(settingName: string, value: any)
-	if cachedSettings[settingName] == nil then return end
-	
-	cachedSettings[settingName] = value
+function SettingsClient.UpdateSetting(settingName: Types.SettingKey, value: number | boolean): ()
+	if (settingName == "FOV" or settingName == "MusicVol") and typeof(value) == "number" then
+		setNumberSetting(settingName, value)
+	elseif (settingName == "ShowFPS" or settingName == "GlobalShadows") and typeof(value) == "boolean" then
+		setBooleanSetting(settingName, value)
+	else
+		return
+	end
+
 	lastLocalUpdates[settingName] = os.clock()
-	
 	updateVisuals()
 	settingsUpdatedSignal:Fire(settingName, value)
 
-	local payload: Types.SettingsUpdate = { [settingName] = value }
-	Blink.UpdateSettings.Fire(payload)
+	Blink.UpdateSettings.Fire({
+		FOV = if settingName == "FOV" then cachedSettings.FOV else nil,
+		MusicVol = if settingName == "MusicVol" then cachedSettings.MusicVol else nil,
+		ShowFPS = if settingName == "ShowFPS" then cachedSettings.ShowFPS else nil,
+		GlobalShadows = cachedSettings.GlobalShadows,
+	})
 end
 
 local function setupSlider(
-	sliderFrame: Frame, 
-	canvasGroup: Frame,
-	fillFrame: Frame, 
-	sliderController: Frame, -- Changed from GuiObject to Frame to avoid abstract warning
-	valueLabel: TextLabel, 
-	settingName: "FOV" | "MusicVol", 
-	minValue: number, 
+	sliderFrame: Frame,
+	canvasGroup: CanvasGroup,
+	fillFrame: Frame,
+	sliderController: Frame,
+	valueLabel: TextLabel,
+	settingName: "FOV" | "MusicVol",
+	minValue: number,
 	maxValue: number
-)
+): ()
 	sliderFrame.Active = true
 	sliderController.Active = true
 	canvasGroup.Active = false
 	fillFrame.Active = false
-	
-	pcall(function()
-		canvasGroup.Interactable = true
-		fillFrame.Interactable = false
-		sliderController.Interactable = true
-	end)
-	
+	canvasGroup.Interactable = true
+	fillFrame.Interactable = false
+	sliderController.Interactable = true
+
 	sliderController.AnchorPoint = Vector2.new(0.5, sliderController.AnchorPoint.Y)
 	local isDragging = false
 
-	local function calculateAndUpdate(input: InputObject)
+	local function calculateAndUpdate(input: InputObject): ()
 		local frameSize = sliderFrame.AbsoluteSize
-		if frameSize.X <= 0 then return end
+		if frameSize.X <= 0 then
+			return
+		end
 
 		local relativeX = input.Position.X - sliderFrame.AbsolutePosition.X
 		local percentage = math.clamp(relativeX / frameSize.X, 0, 1)
@@ -142,151 +183,165 @@ local function setupSlider(
 
 		local calculatedValue = math.round(minValue + (percentage * (maxValue - minValue)))
 		valueLabel.Text = tostring(calculatedValue)
-		
-		cachedSettings[settingName] = calculatedValue
+
+		setNumberSetting(settingName, calculatedValue)
 		lastLocalUpdates[settingName] = os.clock()
-		
+
 		applyEngineSettings()
 		settingsUpdatedSignal:Fire(settingName, calculatedValue)
 	end
 
-	sliderFrame.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			isDragging = true
-			calculateAndUpdate(input)
+	local function commitDrag(): ()
+		if not isDragging then
+			return
 		end
-	end)
-
-	sliderController.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			isDragging = true
-			calculateAndUpdate(input)
-		end
-	end)
-
-	UserInputService.InputChanged:Connect(function(input)
-		if isDragging then
-			if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-				calculateAndUpdate(input)
-			end
-		end
-	end)
-
-	UserInputService.InputEnded:Connect(function(input)
-		if isDragging then
-			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-				isDragging = false
-				local finalPct = fillFrame.Size.Width.Scale
-				local finalValue = math.round(minValue + (finalPct * (maxValue - minValue)))
-				SettingsClient.UpdateSetting(settingName, finalValue)
-			end
-		end
-	end)
-end
-
-function SettingsClient.OnInit()
-	if isInitialized then return end
-	
-	task.spawn(function()
-		local player = Players.LocalPlayer
-		if not player then
-			Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
-			player = Players.LocalPlayer
-		end
-		local confirmedPlayer = player :: Player
-		
-		local playerGui = confirmedPlayer:WaitForChild("PlayerGui") :: PlayerGui
-		local settingsGui = playerGui:WaitForChild("SettingsGui", 15) :: ScreenGui
-		if not settingsGui then warn("[SettingsClient] SettingsGui missing") return end
-
-		local settingsFrame = settingsGui:WaitForChild("Settings", 15) :: Frame
-		if not settingsFrame then warn("[SettingsClient] Settings Frame missing") return end
-
-		-- Slider resolution
-		local fovSliderFrame = settingsFrame:WaitForChild("FovSliderFrame") :: Frame
-		local fovCanvasGroup = fovSliderFrame:WaitForChild("CanvasGroup") :: Frame
-		local fovFillVal = fovCanvasGroup:WaitForChild("Fill") :: Frame
-		local fovControllerVal = fovCanvasGroup:WaitForChild("SliderController") :: Frame -- Changed to Frame
-
-		local musicSliderFrame = settingsFrame:WaitForChild("MusicSliderFrame") :: Frame
-		local musicCanvasGroup = musicSliderFrame:WaitForChild("CanvasGroup") :: Frame
-		local musicFillVal = musicCanvasGroup:WaitForChild("Fill") :: Frame
-		local musicControllerVal = musicCanvasGroup:WaitForChild("SliderController") :: Frame -- Changed to Frame
-
-		-- Element connections
-		local shadowsButtonVal = settingsFrame:WaitForChild("ShadowsButton") :: TextButton
-		local statisticsButtonVal = settingsFrame:WaitForChild("StatisticsButton") :: TextButton
-		local StatisticsLabelVal = settingsGui:WaitForChild("StatisticsLabel") :: TextLabel
-		local fovValueLabelVal = settingsFrame:WaitForChild("FovValue") :: TextLabel
-		local musicValueLabelVal = settingsFrame:WaitForChild("MusicValue") :: TextLabel
-
-		-- Assign references to upvalues
-		fovFill = fovFillVal
-		fovController = fovControllerVal
-		fovValueLabel = fovValueLabelVal
-
-		musicFill = musicFillVal
-		musicController = musicControllerVal
-		musicValueLabel = musicValueLabelVal
-
-		shadowsButton = shadowsButtonVal
-		statisticsButton = statisticsButtonVal
-		StatisticsLabel = StatisticsLabelVal
-
-		isInitialized = true
-
-		-- Pass guaranteed non-nil local references to the slider setup
-		setupSlider(fovSliderFrame, fovCanvasGroup, fovFillVal, fovControllerVal, fovValueLabelVal, "FOV", 30, 120)
-		setupSlider(musicSliderFrame, musicCanvasGroup, musicFillVal, musicControllerVal, musicValueLabelVal, "MusicVol", 0, 100)
-
-		-- Connect events using local references to eliminate optional warnings
-		shadowsButtonVal.Activated:Connect(function()
-			SettingsClient.UpdateSetting("GlobalShadows", not cachedSettings.GlobalShadows)
-		end)
-
-		statisticsButtonVal.Activated:Connect(function()
-			SettingsClient.UpdateSetting("ShowFPS", not cachedSettings.ShowFPS)
-		end)
-
-		updateVisuals()
-	end)
-end
-
-task.spawn(function()
-	local player = Players.LocalPlayer
-	if not player then
-		Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
-		player = Players.LocalPlayer
+		isDragging = false
+		local finalPct = fillFrame.Size.Width.Scale
+		local finalValue = math.round(minValue + (finalPct * (maxValue - minValue)))
+		SettingsClient.UpdateSetting(settingName, finalValue)
 	end
-	local confirmedPlayer = player :: Player
-	
-	confirmedPlayer.CharacterAdded:Connect(function()
-		task.wait(0.2)
-		applyEngineSettings()
-	end)
-end)
 
-Blink.SyncSettings.On(function(validatedSettings: any)
-	if typeof(validatedSettings) == "table" then
-		local changed = false
+	local function beginDrag(input: InputObject): ()
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			isDragging = true
+			calculateAndUpdate(input)
+		end
+	end
+
+	sliderFrame.InputBegan:Connect(beginDrag)
+	sliderController.InputBegan:Connect(beginDrag)
+
+	UserInputService.InputChanged:Connect(function(input: InputObject)
+		if isDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			calculateAndUpdate(input)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input: InputObject)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			commitDrag()
+		end
+	end)
+
+	GuiService.MenuOpened:Connect(commitDrag)
+	UserInputService.WindowFocusReleased:Connect(commitDrag)
+end
+
+local function applyServerSetting<T>(
+	key: Types.SettingKey,
+	incoming: T?,
+	current: T,
+	now: number
+): (T, boolean)
+	if incoming == nil then
+		return current, false
+	end
+	if now - (lastLocalUpdates[key] or 0) <= SETTING_LOCK_DURATION then
+		return current, false
+	end
+	if incoming ~= current then
+		settingsUpdatedSignal:Fire(key, incoming)
+		return incoming, true
+	end
+	return current, false
+end
+
+function SettingsClient.OnInit(): ()
+	if isInitialized then
+		return
+	end
+
+	Blink.SyncSettings.On(function(validatedSettings: Types.SettingsUpdate)
 		local now = os.clock()
-		
-		for key, val in pairs(validatedSettings :: { [string]: any }) do
-			if cachedSettings[key] ~= nil then
-				local lastUpdate = lastLocalUpdates[key] or 0
-				if now - lastUpdate > SETTING_LOCK_DURATION then
-					if cachedSettings[key] ~= val then
-						cachedSettings[key] = val
-						settingsUpdatedSignal:Fire(key, val)
-						changed = true
-					end
-				end
-			end
+		local changed = false
+
+		local newFov, fovChanged = applyServerSetting("FOV", validatedSettings.FOV, cachedSettings.FOV, now)
+		if fovChanged then
+			cachedSettings.FOV = newFov
+			changed = true
 		end
-		if changed then 
-			updateVisuals() 
+
+		local newVol, volChanged = applyServerSetting("MusicVol", validatedSettings.MusicVol, cachedSettings.MusicVol, now)
+		if volChanged then
+			cachedSettings.MusicVol = newVol
+			changed = true
 		end
+
+		local newFps, fpsChanged = applyServerSetting("ShowFPS", validatedSettings.ShowFPS, cachedSettings.ShowFPS, now)
+		if fpsChanged then
+			cachedSettings.ShowFPS = newFps
+			changed = true
+		end
+
+		local newShadows, shadowsChanged = applyServerSetting("GlobalShadows", validatedSettings.GlobalShadows, cachedSettings.GlobalShadows, now)
+		if shadowsChanged then
+			cachedSettings.GlobalShadows = newShadows
+			changed = true
+		end
+
+		if changed then
+			updateVisuals()
+		end
+	end)
+
+	local localPlayer = Players.LocalPlayer :: Player
+	local playerGui = localPlayer:WaitForChild("PlayerGui") :: PlayerGui
+	local settingsGui = playerGui:WaitForChild("SettingsGui", 15)
+	if not settingsGui or not settingsGui:IsA("ScreenGui") then
+		warn("[SettingsClient] SettingsGui missing")
+		return
 	end
-end)
+
+	local settingsFrame = settingsGui:WaitForChild("Settings", 10)
+	if not settingsFrame or not settingsFrame:IsA("Frame") then
+		warn("[SettingsClient] Settings Frame missing")
+		return
+	end
+
+	local fovSliderFrame = settingsFrame:WaitForChild("FovSliderFrame") :: Frame
+	local fovCanvasGroup = fovSliderFrame:WaitForChild("CanvasGroup") :: CanvasGroup
+	local fovFillInst = fovCanvasGroup:WaitForChild("Fill") :: Frame
+	local fovControllerInst = fovCanvasGroup:WaitForChild("SliderController") :: Frame
+
+	local musicSliderFrame = settingsFrame:WaitForChild("MusicSliderFrame") :: Frame
+	local musicCanvasGroup = musicSliderFrame:WaitForChild("CanvasGroup") :: CanvasGroup
+	local musicFillInst = musicCanvasGroup:WaitForChild("Fill") :: Frame
+	local musicControllerInst = musicCanvasGroup:WaitForChild("SliderController") :: Frame
+
+	local shadowsButtonInst = settingsFrame:WaitForChild("ShadowsButton") :: TextButton
+	local statisticsButtonInst = settingsFrame:WaitForChild("StatisticsButton") :: TextButton
+	local statisticsLabelInst = settingsGui:WaitForChild("StatisticsLabel") :: TextLabel
+	local fovValueLabelInst = settingsFrame:WaitForChild("FovValue") :: TextLabel
+	local musicValueLabelInst = settingsFrame:WaitForChild("MusicValue") :: TextLabel
+
+	fovFill = fovFillInst
+	fovController = fovControllerInst
+	fovValueLabel = fovValueLabelInst
+	musicFill = musicFillInst
+	musicController = musicControllerInst
+	musicValueLabel = musicValueLabelInst
+	shadowsButton = shadowsButtonInst
+	statisticsButton = statisticsButtonInst
+	statisticsLabel = statisticsLabelInst
+
+	isInitialized = true
+
+	setupSlider(fovSliderFrame, fovCanvasGroup, fovFillInst, fovControllerInst, fovValueLabelInst, "FOV", 30, 120)
+	setupSlider(musicSliderFrame, musicCanvasGroup, musicFillInst, musicControllerInst, musicValueLabelInst, "MusicVol", 0, 100)
+
+	shadowsButtonInst.Activated:Connect(function()
+		SettingsClient.UpdateSetting("GlobalShadows", not cachedSettings.GlobalShadows)
+	end)
+
+	statisticsButtonInst.Activated:Connect(function()
+		SettingsClient.UpdateSetting("ShowFPS", not cachedSettings.ShowFPS)
+	end)
+
+	localPlayer.CharacterAdded:Connect(function()
+		task.defer(applyEngineSettings)
+	end)
+
+	updateVisuals()
+end
 
 return SettingsClient

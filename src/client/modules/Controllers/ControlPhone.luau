@@ -1,222 +1,265 @@
 --!strict
 --!native
---[[ 
-    ControlPhone Module (Fixed Jump)
-    - Zero idle CPU usage.
-    - Fixed infinite jumping bug.
-]]
-
+local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
-local GuiService = game:GetService("GuiService")
 
 export type ControlPhone = {
 	Enable: (self: ControlPhone) -> (),
-	Disable: (self: ControlPhone) -> ()
+	Disable: (self: ControlPhone) -> (),
 }
 
 type JoystickData = {
 	IsDragging: boolean,
 	TouchId: InputObject?,
-	MoveVector: Vector2
+	MoveVector: Vector2,
 }
 
-local ZONE_WIDTH_LIMIT = 0.4   
-local ZONE_HEIGHT_LIMIT = 0.33  
+local ZONE_WIDTH_LIMIT = 0.4
+local ZONE_HEIGHT_LIMIT = 0.33
 
-local _player = Players.LocalPlayer :: Player
-local _activeConnections: { RBXScriptConnection } = {}
-local _updateConnection: RBXScriptConnection? = nil
+local localPlayer = Players.LocalPlayer :: Player
+local activeConnections: { RBXScriptConnection } = {}
+local updateConnection: RBXScriptConnection? = nil
 
-local _joystickState: JoystickData = { IsDragging = false, TouchId = nil, MoveVector = Vector2.zero }
-local _isJumping = false
-local _cachedHumanoid: Humanoid? = nil
-local _viewportSize: Vector2 = Vector2.zero
+local joystickState: JoystickData = { IsDragging = false, TouchId = nil, MoveVector = Vector2.zero }
+local isJumping = false
+local jumpTouchId: InputObject? = nil
+local cachedHumanoid: Humanoid? = nil
+local charWaitGeneration = 0
+local viewportSize: Vector2 = Vector2.zero
 
-local _joystickBase: Frame? = nil
-local _joystickThumb: ImageButton? = nil
-local _jumpButton: ImageButton? = nil
+local joystickBase: Frame? = nil
+local joystickThumb: ImageButton? = nil
 
 local ControlPhone = {} :: ControlPhone
 
-local function updateCharacterCache(character: Model)
-	_cachedHumanoid = character:WaitForChild("Humanoid") :: Humanoid
+local function isPointerInput(input: InputObject): boolean
+	return input.UserInputType == Enum.UserInputType.Touch
+		or (RunService:IsStudio() and input.UserInputType == Enum.UserInputType.MouseButton1)
+end
+
+local function updateCharacterCache(character: Model): ()
+	charWaitGeneration += 1
+	local myGen = charWaitGeneration
+
+	local hum = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 5)
+	if myGen == charWaitGeneration and hum and hum:IsA("Humanoid") and character.Parent then
+		cachedHumanoid = hum
+	end
 end
 
 local function isWithinTouchZone(pos: Vector3): boolean
-	if _viewportSize.X == 0 then return false end
-	return pos.X < (_viewportSize.X * ZONE_WIDTH_LIMIT) and pos.Y > (_viewportSize.Y * ZONE_HEIGHT_LIMIT)
+	if viewportSize.X <= 0 then
+		return false
+	end
+	return pos.X < (viewportSize.X * ZONE_WIDTH_LIMIT) and pos.Y > (viewportSize.Y * ZONE_HEIGHT_LIMIT)
 end
 
 local function shouldUpdate(): boolean
-	return _isJumping or _joystickState.IsDragging
+	return isJumping or joystickState.IsDragging
 end
 
-local function onUpdate(dt: number): ()
-	if not _cachedHumanoid then return end
+local function onUpdate(): ()
+	local humanoid = cachedHumanoid
+	if not humanoid then
+		return
+	end
 
-	-- NAPRAWA: Zawsze przypisujemy aktualny stan (włącza i wyłącza skok)
-	_cachedHumanoid.Jump = _isJumping
+	humanoid.Jump = isJumping
 
 	local camera = Workspace.CurrentCamera
-	if camera and _joystickState.MoveVector.Magnitude > 0 then
+	if camera and joystickState.MoveVector.Magnitude > 0 then
 		local camCF = camera.CFrame
-		local forward = Vector3.new(camCF.LookVector.X, 0, camCF.LookVector.Z).Unit
-		local right = Vector3.new(camCF.RightVector.X, 0, camCF.RightVector.Z).Unit
-		
-		local dir = (forward * -_joystickState.MoveVector.Y) + (right * _joystickState.MoveVector.X)
-		_cachedHumanoid:Move(dir, false)
-	else
-		_cachedHumanoid:Move(Vector3.zero, false)
+		local flatForward = Vector3.new(camCF.LookVector.X, 0, camCF.LookVector.Z)
+		local flatRight = Vector3.new(camCF.RightVector.X, 0, camCF.RightVector.Z)
+
+		if flatForward.Magnitude > 1e-4 and flatRight.Magnitude > 1e-4 then
+			local dir = (flatForward.Unit * -joystickState.MoveVector.Y) + (flatRight.Unit * joystickState.MoveVector.X)
+			humanoid:Move(dir, false)
+			return
+		end
 	end
+
+	humanoid:Move(Vector3.zero, false)
 end
 
 local function evaluateUpdateLoop(): ()
 	if shouldUpdate() then
-		if not _updateConnection then
-			_updateConnection = RunService.PreSimulation:Connect(onUpdate)
+		if not updateConnection then
+			updateConnection = RunService.PreSimulation:Connect(onUpdate)
 		end
 	else
-		if _updateConnection then
-			_updateConnection:Disconnect()
-			_updateConnection = nil
-			if _cachedHumanoid then
-				_cachedHumanoid:Move(Vector3.zero, false)
-				_cachedHumanoid.Jump = false -- NAPRAWA: Zerowanie skoku przy usypianiu skryptu
+		if updateConnection then
+			updateConnection:Disconnect()
+			updateConnection = nil
+			if cachedHumanoid then
+				cachedHumanoid:Move(Vector3.zero, false)
+				cachedHumanoid.Jump = false
 			end
 		end
 	end
 end
 
+local function resetTouchState(): ()
+	joystickState.IsDragging = false
+	joystickState.TouchId = nil
+	joystickState.MoveVector = Vector2.zero
+	isJumping = false
+	jumpTouchId = nil
+	if joystickBase then
+		joystickBase.Visible = false
+	end
+	evaluateUpdateLoop()
+end
+
 local function updateJoystickPosition(input: InputObject): ()
-	local joystickBase = _joystickBase
-	local joystickThumb = _joystickThumb
-	if not joystickBase or not joystickThumb then return end
+	local base = joystickBase
+	local thumb = joystickThumb
+	if not base or not thumb then
+		return
+	end
 
-	local basePos = joystickBase.AbsolutePosition + (joystickBase.AbsoluteSize / 2)
-	local diff = Vector2.new(input.Position.X, input.Position.Y) - basePos
-	local radius = joystickBase.AbsoluteSize.X / 2
+	local radius = base.AbsoluteSize.X / 2
+	if radius <= 0 then
+		return
+	end
+
+	local baseCenter = base.AbsolutePosition + (base.AbsoluteSize / 2)
+	local diff = Vector2.new(input.Position.X, input.Position.Y) - baseCenter
 	local dist = math.min(diff.Magnitude, radius)
-	local dir = if diff.Magnitude > 0 then diff.Unit else Vector2.zero
+	local dir = if diff.Magnitude > 1e-4 then diff.Unit else Vector2.zero
 
-	_joystickState.MoveVector = dir * (dist / radius)
-
-	joystickThumb.Position = UDim2.fromOffset(
-		(joystickBase.AbsoluteSize.X / 2) + (dir.X * dist), 
-		(joystickBase.AbsoluteSize.Y / 2) + (dir.Y * dist)
+	joystickState.MoveVector = dir * (dist / radius)
+	thumb.Position = UDim2.fromOffset(
+		(base.AbsoluteSize.X / 2) + (dir.X * dist),
+		(base.AbsoluteSize.Y / 2) + (dir.Y * dist)
 	)
 end
 
 function ControlPhone:Enable(): ()
 	self:Disable()
 
-	local playerGui = _player:WaitForChild("PlayerGui") :: PlayerGui
-	local hud = playerGui:WaitForChild("GameHUD") :: ScreenGui
-	
-	local joystickBaseInstance = hud:WaitForChild("JoystickBase") :: Frame
-	local joystickThumbInstance = joystickBaseInstance:WaitForChild("JoystickThumb") :: ImageButton
-	local jumpButtonInstance = hud:WaitForChild("JumpButton") :: ImageButton
-
-	_joystickBase = joystickBaseInstance
-	_joystickThumb = joystickThumbInstance
-	_jumpButton = jumpButtonInstance
-
-	if _player.Character then
-		task.spawn(updateCharacterCache, _player.Character)
+	local playerGui = localPlayer:WaitForChild("PlayerGui") :: PlayerGui
+	local hud = playerGui:WaitForChild("GameHUD", 10)
+	if not hud or not hud:IsA("ScreenGui") then
+		warn("[ControlPhone] GameHUD missing")
+		return
 	end
-	table.insert(_activeConnections, _player.CharacterAdded:Connect(function(char)
+
+	local joystickBaseInst = hud:WaitForChild("JoystickBase", 5)
+	local jumpButtonInst = hud:WaitForChild("JumpButton", 5)
+	if not joystickBaseInst or not joystickBaseInst:IsA("Frame") or not jumpButtonInst or not jumpButtonInst:IsA("ImageButton") then
+		warn("[ControlPhone] JoystickBase or JumpButton missing")
+		return
+	end
+
+	local joystickThumbInst = joystickBaseInst:WaitForChild("JoystickThumb", 5)
+	if not joystickThumbInst or not joystickThumbInst:IsA("ImageButton") then
+		warn("[ControlPhone] JoystickThumb missing")
+		return
+	end
+
+	joystickBase = joystickBaseInst
+	joystickThumb = joystickThumbInst
+
+	if localPlayer.Character then
+		task.spawn(updateCharacterCache, localPlayer.Character)
+	end
+
+	table.insert(activeConnections, localPlayer.CharacterAdded:Connect(function(char: Model)
 		task.spawn(updateCharacterCache, char)
 	end))
-	table.insert(_activeConnections, _player.CharacterRemoving:Connect(function()
-		_cachedHumanoid = nil
+
+	table.insert(activeConnections, localPlayer.CharacterRemoving:Connect(function()
+		charWaitGeneration += 1
+		cachedHumanoid = nil
 		evaluateUpdateLoop()
 	end))
 
 	local camera = Workspace.CurrentCamera
 	if camera then
-		_viewportSize = camera.ViewportSize
-		table.insert(_activeConnections, camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
-			_viewportSize = camera.ViewportSize
+		viewportSize = camera.ViewportSize
+		table.insert(activeConnections, camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+			viewportSize = camera.ViewportSize
 		end))
 	end
 
-	table.insert(_activeConnections, UserInputService.InputBegan:Connect(function(input, processed)
-		if processed then return end
-		local isTouch = input.UserInputType == Enum.UserInputType.Touch
-		local isMouse = input.UserInputType == Enum.UserInputType.MouseButton1
-		
-		if (isTouch or isMouse) and isWithinTouchZone(input.Position) then
-			_joystickState.IsDragging = true
-			_joystickState.TouchId = input
-			
-			joystickBaseInstance.Position = UDim2.fromOffset(input.Position.X, input.Position.Y)
-			joystickThumbInstance.Position = UDim2.fromScale(0.5, 0.5)
-			_joystickState.MoveVector = Vector2.zero
-			joystickBaseInstance.Visible = true
+	table.insert(activeConnections, UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
+		if processed then
+			return
+		end
+
+		if isPointerInput(input) and isWithinTouchZone(input.Position) then
+			joystickState.IsDragging = true
+			joystickState.TouchId = input
+
+			joystickBaseInst.Position = UDim2.fromOffset(input.Position.X, input.Position.Y)
+			joystickThumbInst.Position = UDim2.fromScale(0.5, 0.5)
+			joystickState.MoveVector = Vector2.zero
+			joystickBaseInst.Visible = true
 			evaluateUpdateLoop()
 		end
 	end))
 
-	table.insert(_activeConnections, UserInputService.InputChanged:Connect(function(input, processed)
-		if _joystickState.IsDragging and input == _joystickState.TouchId then 
-			updateJoystickPosition(input) 
+	table.insert(activeConnections, UserInputService.InputChanged:Connect(function(input: InputObject)
+		if joystickState.IsDragging and input == joystickState.TouchId then
+			updateJoystickPosition(input)
 		end
 	end))
 
-	table.insert(_activeConnections, UserInputService.InputEnded:Connect(function(input, processed)
-		if input == _joystickState.TouchId then
-			_joystickState.IsDragging = false
-			_joystickState.TouchId = nil
-			_joystickState.MoveVector = Vector2.zero
-			joystickBaseInstance.Visible = false 
+	table.insert(activeConnections, UserInputService.InputEnded:Connect(function(input: InputObject)
+		if input == joystickState.TouchId then
+			joystickState.IsDragging = false
+			joystickState.TouchId = nil
+			joystickState.MoveVector = Vector2.zero
+			joystickBaseInst.Visible = false
+			evaluateUpdateLoop()
+		elseif input == jumpTouchId then
+			jumpTouchId = nil
+			isJumping = false
 			evaluateUpdateLoop()
 		end
 	end))
 
-	table.insert(_activeConnections, jumpButtonInstance.InputBegan:Connect(function() 
-		_isJumping = true 
-		evaluateUpdateLoop()
-	end))
-	
-	table.insert(_activeConnections, jumpButtonInstance.InputEnded:Connect(function() 
-		_isJumping = false 
-		evaluateUpdateLoop()
+	table.insert(activeConnections, jumpButtonInst.InputBegan:Connect(function(input: InputObject)
+		if isPointerInput(input) then
+			jumpTouchId = input
+			isJumping = true
+			evaluateUpdateLoop()
+		end
 	end))
 
-	table.insert(_activeConnections, GuiService.MenuOpened:Connect(function()
-		_joystickState.IsDragging = false
-		_joystickState.TouchId = nil
-		_joystickState.MoveVector = Vector2.zero
-		_isJumping = false
-		joystickBaseInstance.Visible = false
-		evaluateUpdateLoop()
+	table.insert(activeConnections, jumpButtonInst.InputEnded:Connect(function(input: InputObject)
+		if input == jumpTouchId or isPointerInput(input) then
+			jumpTouchId = nil
+			isJumping = false
+			evaluateUpdateLoop()
+		end
 	end))
+
+	table.insert(activeConnections, GuiService.MenuOpened:Connect(resetTouchState))
+	table.insert(activeConnections, UserInputService.WindowFocusReleased:Connect(resetTouchState))
 
 	evaluateUpdateLoop()
 end
 
 function ControlPhone:Disable(): ()
-	for _, c in _activeConnections do
-		c:Disconnect()
+	for _, connection in activeConnections do
+		connection:Disconnect()
 	end
-	table.clear(_activeConnections)
+	table.clear(activeConnections)
 
-	if _updateConnection then
-		_updateConnection:Disconnect()
-		_updateConnection = nil
+	if updateConnection then
+		updateConnection:Disconnect()
+		updateConnection = nil
 	end
 
-	_isJumping = false
-	_joystickState.IsDragging = false
-	_joystickState.MoveVector = Vector2.zero
-	_cachedHumanoid = nil
-
-	local joystickBase = _joystickBase
-	if joystickBase then 
-		joystickBase.Visible = false 
-	end
+	charWaitGeneration += 1
+	resetTouchState()
+	cachedHumanoid = nil
 end
 
 return ControlPhone

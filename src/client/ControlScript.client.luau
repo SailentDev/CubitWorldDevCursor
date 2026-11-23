@@ -1,67 +1,58 @@
 --!strict
---[[
-    ControlScript (Orchestrator)
-    Manages device-specific modules and UI visibility.
-]]
-
 local Players = game:GetService("Players")
-local task_defer = task.defer
-local task_spawn = task.spawn
 
--- TYPES
-type DeviceType = "PC" | "Phone"
-type ControlModule = { Enable: (self: ControlModule) -> (), Disable: (self: ControlModule) -> () }
-type InputManagerModule = { 
-	GetDeviceType: (self: InputManagerModule) -> DeviceType, 
-	OnDeviceChanged: (self: InputManagerModule, callback: (newDevice: DeviceType) -> ()) -> () 
+local modulesFolder = script.Parent:WaitForChild("modules") :: Folder
+local controllersFolder = modulesFolder:WaitForChild("Controllers") :: Folder
+
+local InputManager = require(controllersFolder:WaitForChild("InputManager"))
+local ControlPC = require(controllersFolder:WaitForChild("ControlPC"))
+local ControlPhone = require(controllersFolder:WaitForChild("ControlPhone"))
+
+type DeviceType = InputManager.DeviceType
+type ControlModule = {
+	Enable: (self: ControlModule) -> (),
+	Disable: (self: ControlModule) -> (),
 }
 
--- STATE
-local _activeController: ControlModule? = nil
-local _currentDevice: DeviceType? = nil
+local localPlayer = Players.LocalPlayer :: Player
+local activeController: ControlModule? = nil
+local currentDevice: DeviceType? = nil
 
--- UI REFERENCES
-local player = Players.LocalPlayer :: Player
-local playerGui = player:WaitForChild("PlayerGui") :: PlayerGui
-local gameHUD = playerGui:WaitForChild("GameHUD") :: ScreenGui
-local joystickBase = gameHUD:WaitForChild("JoystickBase") :: Frame
-local jumpButton = gameHUD:WaitForChild("JumpButton") :: ImageButton
-
--- REFERENCES
-local modulesFolder = script.Parent:WaitForChild("modules") :: Folder
-local ControllersFolder = modulesFolder:WaitForChild("controllers") :: Folder
-
-local InputManager = require(ControllersFolder:WaitForChild("InputManager")) :: InputManagerModule
-local ControlPC = require(ControllersFolder:WaitForChild("ControlPC")) :: ControlModule
-local ControlPhone = require(ControllersFolder:WaitForChild("ControlPhone")) :: ControlModule
+local playerGui = localPlayer:WaitForChild("PlayerGui") :: PlayerGui
+local gameHUD = playerGui:WaitForChild("GameHUD", 10) :: ScreenGui?
+local joystickBase = if gameHUD then gameHUD:WaitForChild("JoystickBase", 5) :: Frame? else nil
+local jumpButton = if gameHUD then gameHUD:WaitForChild("JumpButton", 5) :: ImageButton? else nil
 
 local function switchController(newDevice: DeviceType): ()
-	if _currentDevice == newDevice then return end
-	
-	if _activeController then _activeController:Disable() end
+	if currentDevice == newDevice then
+		return
+	end
 
-	-- UI Visibility Logic
+	if activeController then
+		activeController:Disable()
+	end
+
 	local isPhone = (newDevice == "Phone")
-	jumpButton.Visible = isPhone
-	joystickBase.Visible = false -- Phone module handles dynamic visibility
+	if jumpButton then
+		jumpButton.Visible = isPhone
+	end
+	if joystickBase then
+		joystickBase.Visible = false
+	end
 
 	if newDevice == "PC" then
-		_activeController = ControlPC
+		activeController = ControlPC
 	elseif newDevice == "Phone" then
-		_activeController = ControlPhone
+		activeController = ControlPhone
 	end
 
-	if _activeController then
-		_activeController:Enable()
-		_currentDevice = newDevice
+	if activeController then
+		activeController:Enable()
+		currentDevice = newDevice
 	end
 end
 
-local function initialize(): ()
-	switchController(InputManager:GetDeviceType())
-	InputManager:OnDeviceChanged(function(newDevice: DeviceType)
-		task_defer(switchController, newDevice) -- Optimized: defer instead of spawn
-	end)
-end
-
-task_spawn(initialize)
+switchController(InputManager:GetDeviceType())
+InputManager:OnDeviceChanged(function(newDevice: DeviceType)
+	task.defer(switchController, newDevice)
+end)

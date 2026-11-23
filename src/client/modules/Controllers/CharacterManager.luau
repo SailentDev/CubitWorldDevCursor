@@ -2,101 +2,116 @@
 local CharacterManager = {}
 
 local cachedParts: { BasePart } = {}
-local isToolPart: { [BasePart]: boolean } = {} 
+local isToolPart: { [BasePart]: boolean } = {}
 
-local descendantAddedConn: RBXScriptConnection?
-local descendantRemovingConn: RBXScriptConnection?
-local currentCharacter: Model?
+local descendantAddedConn: RBXScriptConnection? = nil
+local descendantRemovingConn: RBXScriptConnection? = nil
+local currentCharacter: Model? = nil
 
--- Micro-optimization: File-level caches
-local cachedHumanoid: Humanoid? = nil 
+local cachedHumanoid: Humanoid? = nil
 local cachedRootPart: BasePart? = nil
-local currentTransparencyState: number? = nil -- Optimized: Cache transparency state to avoid redundant writes
+local currentTransparencyState: number? = nil
 
-local function onDescendantAdded(descendant: Instance)
-    if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then
-        local part = descendant :: BasePart
-        table.insert(cachedParts, part)
-        isToolPart[part] = descendant:FindFirstAncestorOfClass("Tool") ~= nil
-        
-        -- Optimized: Apply current active transparency to newly added parts instantly
-        if currentTransparencyState and not isToolPart[part] then
-            part.LocalTransparencyModifier = currentTransparencyState
-        end
-    end
+local function onDescendantAdded(descendant: Instance): ()
+	if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then
+		table.insert(cachedParts, descendant)
+		local inTool = descendant:FindFirstAncestorOfClass("Tool") ~= nil
+		isToolPart[descendant] = inTool
+
+		if currentTransparencyState == 1 and not inTool then
+			descendant.LocalTransparencyModifier = 1
+		end
+	end
 end
 
-local function onDescendantRemoving(descendant: Instance)
-    if descendant:IsA("BasePart") then
-        local part = descendant :: BasePart
-        isToolPart[part] = nil 
-        
-        local index = table.find(cachedParts, part)
-        if index then
-            local last = #cachedParts
-            cachedParts[index] = cachedParts[last]
-            cachedParts[last] = nil :: any
-        end
-    end
+local function onDescendantRemoving(descendant: Instance): ()
+	if descendant:IsA("BasePart") then
+		isToolPart[descendant] = nil
+
+		local index = table.find(cachedParts, descendant)
+		if index then
+			local last = #cachedParts
+			if index ~= last then
+				cachedParts[index] = cachedParts[last]
+			end
+			table.remove(cachedParts)
+		end
+	end
 end
 
-function CharacterManager.SetCharacter(character: Model?)
-    if currentCharacter == character then return end
-    currentCharacter = character
-    
-    if descendantAddedConn then descendantAddedConn:Disconnect() end
-    if descendantRemovingConn then descendantRemovingConn:Disconnect() end
-    table.clear(cachedParts)
-    table.clear(isToolPart)
-    currentTransparencyState = nil -- Reset state cache
-    
-    if character then
-        cachedHumanoid = character:FindFirstChildOfClass("Humanoid") :: Humanoid?
-        cachedRootPart = character:WaitForChild("HumanoidRootPart", 5) :: BasePart?
-        
-        for _, desc in character:GetDescendants() do
-            onDescendantAdded(desc)
-        end
-        descendantAddedConn = character.DescendantAdded:Connect(onDescendantAdded)
-        descendantRemovingConn = character.DescendantRemoving:Connect(onDescendantRemoving)
-    else
-        cachedHumanoid = nil
-        cachedRootPart = nil
-    end
+function CharacterManager.SetCharacter(character: Model?, rootPartOverride: BasePart?): ()
+	if currentCharacter == character then
+		return
+	end
+	currentCharacter = character
+
+	if descendantAddedConn then
+		descendantAddedConn:Disconnect()
+		descendantAddedConn = nil
+	end
+	if descendantRemovingConn then
+		descendantRemovingConn:Disconnect()
+		descendantRemovingConn = nil
+	end
+
+	table.clear(cachedParts)
+	table.clear(isToolPart)
+	currentTransparencyState = nil
+
+	if character then
+		cachedHumanoid = character:FindFirstChildOfClass("Humanoid")
+		local foundRoot = rootPartOverride or character:FindFirstChild("HumanoidRootPart")
+		if foundRoot and foundRoot:IsA("BasePart") then
+			cachedRootPart = foundRoot
+		else
+			local awaited = character:WaitForChild("HumanoidRootPart", 5)
+			cachedRootPart = if awaited and awaited:IsA("BasePart") then awaited else nil
+		end
+
+		for _, desc in character:GetDescendants() do
+			onDescendantAdded(desc)
+		end
+		descendantAddedConn = character.DescendantAdded:Connect(onDescendantAdded)
+		descendantRemovingConn = character.DescendantRemoving:Connect(onDescendantRemoving)
+	else
+		cachedHumanoid = nil
+		cachedRootPart = nil
+	end
 end
 
-function CharacterManager.Update(isFirstPerson: boolean, shouldRotateCharacter: boolean, lookVector: Vector3)
-    if not currentCharacter then return end
-    
-    local humanoid = cachedHumanoid
-    if humanoid and humanoid.AutoRotate == shouldRotateCharacter then
-        humanoid.AutoRotate = not shouldRotateCharacter
-    end
-    
-    if shouldRotateCharacter then
-        local rootPart = cachedRootPart
-        if rootPart then
-            local flatLook = Vector3.new(lookVector.X, 0, lookVector.Z)
-            if flatLook.Magnitude > 1e-4 then
-                flatLook = flatLook.Unit
-                local right = Vector3.new(-flatLook.Z, 0, flatLook.X)
-                local up = Vector3.new(0, 1, 0)
-                rootPart.CFrame = CFrame.fromMatrix(rootPart.Position, right, up, -flatLook)
-            end
-        end
-    end
-    
-    -- Optimized: Only update part transparency when the actual state changes
-    local targetTransparency = isFirstPerson and 1 or 0
-    if currentTransparencyState ~= targetTransparency then
-        currentTransparencyState = targetTransparency
-        for i = 1, #cachedParts do
-            local part = cachedParts[i]
-            if not isToolPart[part] then 
-                part.LocalTransparencyModifier = targetTransparency
-            end
-        end
-    end
+function CharacterManager.Update(isFirstPerson: boolean, shouldRotateCharacter: boolean, lookVector: Vector3): ()
+	if not currentCharacter then
+		return
+	end
+
+	local humanoid = cachedHumanoid
+	if humanoid and humanoid.AutoRotate == shouldRotateCharacter then
+		humanoid.AutoRotate = not shouldRotateCharacter
+	end
+
+	if shouldRotateCharacter then
+		local canRotate = not humanoid or (humanoid.Health > 0 and not humanoid.PlatformStand)
+		local rootPart = cachedRootPart
+		if canRotate and rootPart then
+			local flatLook = Vector3.new(lookVector.X, 0, lookVector.Z)
+			if flatLook.Magnitude > 1e-4 then
+				flatLook = flatLook.Unit
+				local right = Vector3.new(-flatLook.Z, 0, flatLook.X)
+				local up = Vector3.new(0, 1, 0)
+				rootPart.CFrame = CFrame.fromMatrix(rootPart.Position, right, up, -flatLook)
+			end
+		end
+	end
+
+	local targetTransparency = if isFirstPerson then 1 else 0
+	if currentTransparencyState ~= targetTransparency then
+		currentTransparencyState = targetTransparency
+		for _, part in cachedParts do
+			if not isToolPart[part] then
+				part.LocalTransparencyModifier = targetTransparency
+			end
+		end
+	end
 end
 
 return CharacterManager
