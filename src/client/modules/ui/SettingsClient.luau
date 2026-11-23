@@ -32,14 +32,14 @@ local lastLocalUpdates: { [Types.SettingKey]: number } = {}
 local settingsUpdatedSignal = Instance.new("BindableEvent")
 SettingsClient.SettingsUpdated = settingsUpdatedSignal.Event
 
-local fovFill: Frame? = nil
-local fovController: Frame? = nil
+local fovFill: GuiObject? = nil
+local fovController: GuiObject? = nil
 local fovValueLabel: TextLabel? = nil
-local musicFill: Frame? = nil
-local musicController: Frame? = nil
+local musicFill: GuiObject? = nil
+local musicController: GuiObject? = nil
 local musicValueLabel: TextLabel? = nil
-local shadowsButton: TextButton? = nil
-local statisticsButton: TextButton? = nil
+local shadowsButton: GuiButton? = nil
+local statisticsButton: GuiButton? = nil
 local statisticsLabel: TextLabel? = nil
 
 local function waitForChildPath(parent: Instance, childName: string, timeout: number, parentPath: string): Instance?
@@ -95,14 +95,14 @@ local function updateVisuals(): ()
 	if fovFill and fovController and fovValueLabel then
 		local fovPct = math.clamp((cachedSettings.FOV - 30) / 90, 0, 1)
 		fovFill.Size = UDim2.fromScale(fovPct, 1)
-		fovController.Position = UDim2.fromScale(fovPct, fovController.Position.Y.Scale)
+		fovController.Position = UDim2.new(fovPct, 0, fovController.Position.Y.Scale, fovController.Position.Y.Offset)
 		fovValueLabel.Text = tostring(math.round(cachedSettings.FOV))
 	end
 
 	if musicFill and musicController and musicValueLabel then
 		local musicPct = math.clamp(cachedSettings.MusicVol / 100, 0, 1)
 		musicFill.Size = UDim2.fromScale(musicPct, 1)
-		musicController.Position = UDim2.fromScale(musicPct, musicController.Position.Y.Scale)
+		musicController.Position = UDim2.new(musicPct, 0, musicController.Position.Y.Scale, musicController.Position.Y.Offset)
 		musicValueLabel.Text = tostring(math.round(cachedSettings.MusicVol))
 	end
 
@@ -158,10 +158,10 @@ function SettingsClient.UpdateSetting(settingName: Types.SettingKey, value: numb
 end
 
 local function setupSlider(
-	sliderFrame: Frame,
+	sliderFrame: GuiObject,
 	canvasGroup: CanvasGroup,
-	fillFrame: Frame,
-	sliderController: Frame,
+	fillFrame: GuiObject,
+	sliderController: GuiObject,
 	valueLabel: TextLabel,
 	settingName: "FOV" | "MusicVol",
 	minValue: number,
@@ -188,7 +188,7 @@ local function setupSlider(
 		local percentage = math.clamp(relativeX / frameSize.X, 0, 1)
 
 		fillFrame.Size = UDim2.fromScale(percentage, 1)
-		sliderController.Position = UDim2.fromScale(percentage, sliderController.Position.Y.Scale)
+		sliderController.Position = UDim2.new(percentage, 0, sliderController.Position.Y.Scale, sliderController.Position.Y.Offset)
 
 		local calculatedValue = math.round(minValue + (percentage * (maxValue - minValue)))
 		valueLabel.Text = tostring(calculatedValue)
@@ -308,9 +308,9 @@ function SettingsClient.OnInit(): ()
 	end
 
 	local settingsFrame = waitForChildPath(settingsGui, "Settings", 3, "PlayerGui.SettingsGui")
-	if not settingsFrame or not settingsFrame:IsA("Frame") then
+	if not settingsFrame or not settingsFrame:IsA("GuiObject") then
 		if settingsFrame then
-			warn("[SettingsClient] PlayerGui.SettingsGui.Settings is not a Frame")
+			warn("[SettingsClient] PlayerGui.SettingsGui.Settings is not a GuiObject")
 		end
 		return
 	end
@@ -318,30 +318,36 @@ function SettingsClient.OnInit(): ()
 	local settingsPath = "PlayerGui.SettingsGui.Settings"
 
 	local fovSliderFrame = waitForChildPath(settingsFrame, "FovSliderFrame", 3, settingsPath)
-	if not fovSliderFrame or not fovSliderFrame:IsA("Frame") then
+	if not fovSliderFrame or not fovSliderFrame:IsA("GuiObject") then
+		warn("[SettingsClient] FovSliderFrame invalid or missing")
 		return
 	end
 	local fovCanvasGroup = waitForChildPath(fovSliderFrame, "CanvasGroup", 3, settingsPath .. ".FovSliderFrame")
 	if not fovCanvasGroup or not fovCanvasGroup:IsA("CanvasGroup") then
+		warn("[SettingsClient] FovSliderFrame.CanvasGroup invalid or missing")
 		return
 	end
 	local fovFillInst = waitForChildPath(fovCanvasGroup, "Fill", 3, settingsPath .. ".FovSliderFrame.CanvasGroup")
 	local fovControllerInst = waitForChildPath(fovCanvasGroup, "SliderController", 3, settingsPath .. ".FovSliderFrame.CanvasGroup")
-	if not fovFillInst or not fovFillInst:IsA("Frame") or not fovControllerInst or not fovControllerInst:IsA("Frame") then
+	if not fovFillInst or not fovFillInst:IsA("GuiObject") or not fovControllerInst or not fovControllerInst:IsA("GuiObject") then
+		warn("[SettingsClient] FovSliderFrame Fill/SliderController invalid or missing")
 		return
 	end
 
 	local musicSliderFrame = waitForChildPath(settingsFrame, "MusicSliderFrame", 3, settingsPath)
-	if not musicSliderFrame or not musicSliderFrame:IsA("Frame") then
+	if not musicSliderFrame or not musicSliderFrame:IsA("GuiObject") then
+		warn("[SettingsClient] MusicSliderFrame invalid or missing")
 		return
 	end
 	local musicCanvasGroup = waitForChildPath(musicSliderFrame, "CanvasGroup", 3, settingsPath .. ".MusicSliderFrame")
 	if not musicCanvasGroup or not musicCanvasGroup:IsA("CanvasGroup") then
+		warn("[SettingsClient] MusicSliderFrame.CanvasGroup invalid or missing")
 		return
 	end
 	local musicFillInst = waitForChildPath(musicCanvasGroup, "Fill", 3, settingsPath .. ".MusicSliderFrame.CanvasGroup")
 	local musicControllerInst = waitForChildPath(musicCanvasGroup, "SliderController", 3, settingsPath .. ".MusicSliderFrame.CanvasGroup")
-	if not musicFillInst or not musicFillInst:IsA("Frame") or not musicControllerInst or not musicControllerInst:IsA("Frame") then
+	if not musicFillInst or not musicFillInst:IsA("GuiObject") or not musicControllerInst or not musicControllerInst:IsA("GuiObject") then
+		warn("[SettingsClient] MusicSliderFrame Fill/SliderController invalid or missing")
 		return
 	end
 
@@ -351,12 +357,13 @@ function SettingsClient.OnInit(): ()
 	local fovValueLabelInst = waitForChildPath(settingsFrame, "FovValue", 3, settingsPath)
 	local musicValueLabelInst = waitForChildPath(settingsFrame, "MusicValue", 3, settingsPath)
 
-	if not shadowsButtonInst or not shadowsButtonInst:IsA("TextButton")
-		or not statisticsButtonInst or not statisticsButtonInst:IsA("TextButton")
+	if not shadowsButtonInst or not shadowsButtonInst:IsA("GuiButton")
+		or not statisticsButtonInst or not statisticsButtonInst:IsA("GuiButton")
 		or not statisticsLabelInst or not statisticsLabelInst:IsA("TextLabel")
 		or not fovValueLabelInst or not fovValueLabelInst:IsA("TextLabel")
 		or not musicValueLabelInst or not musicValueLabelInst:IsA("TextLabel")
 	then
+		warn("[SettingsClient] One or more Settings controls have an unexpected class")
 		return
 	end
 
@@ -386,6 +393,8 @@ function SettingsClient.OnInit(): ()
 	localPlayer.CharacterAdded:Connect(function()
 		task.defer(applyEngineSettings)
 	end)
+
+	Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(applyEngineSettings)
 
 	updateVisuals()
 end
