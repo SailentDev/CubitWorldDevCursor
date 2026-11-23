@@ -21,6 +21,8 @@ type LoadedModule = {
 	module: ClientModule,
 }
 
+local INIT_TIMEOUT_SECONDS = 10
+
 local MODULE_PRIORITY: { [string]: number } = {
 	StatisticsTracker = 1,
 	SettingsClient = 2,
@@ -31,6 +33,56 @@ local MODULE_PRIORITY: { [string]: number } = {
 	InventoryClient = 7,
 	ClientOptimization = 8,
 }
+
+local function traceError(err: unknown): string
+	return debug.traceback(tostring(err), 2)
+end
+
+local function runInitWithTimeout(moduleName: string, initFn: () -> ()): boolean
+	local finished = false
+	local timedOut = false
+	local succeeded = false
+	local callerThread = coroutine.running()
+
+	local workerThread = task.spawn(function()
+		local ok, err = xpcall(initFn, traceError)
+		if timedOut then
+			return
+		end
+		finished = true
+		succeeded = ok
+		if not ok then
+			warn(`  [OnInit Error] '{moduleName}': {tostring(err)}`)
+		end
+		if coroutine.status(callerThread) == "suspended" then
+			task.spawn(callerThread)
+		end
+	end)
+
+	if finished then
+		return succeeded
+	end
+
+	local timeoutThread = task.delay(INIT_TIMEOUT_SECONDS, function()
+		if finished then
+			return
+		end
+		timedOut = true
+		warn(`  [OnInit Timeout] '{moduleName}' exceeded {INIT_TIMEOUT_SECONDS}s; continuing boot.`)
+		pcall(task.cancel, workerThread)
+		if coroutine.status(callerThread) == "suspended" then
+			task.spawn(callerThread)
+		end
+	end)
+
+	coroutine.yield()
+
+	if not timedOut then
+		pcall(task.cancel, timeoutThread)
+	end
+
+	return finished and succeeded
+end
 
 local function getModulePriority(name: string): number
 	return MODULE_PRIORITY[name] or 100
@@ -68,9 +120,9 @@ function ClientLoader.Boot(): ()
 	print("[CLIENT BOOT] Starting Cubit World client modules...")
 	print("==================================================")
 
-	-- Phase 1: Synchronous OnInit
+	-- Phase 1: Synchronous OnInit with timeout guard
 	for _, moduleScript in modulesToLoad do
-		local requireSuccess, result = pcall(require, moduleScript)
+		local requireSuccess, result = xpcall(require, traceError, moduleScript)
 		if not requireSuccess then
 			warn(`[CLIENT REQUIRE ERROR] Failed to load '{moduleScript.Name}': {tostring(result)}`)
 			continue
@@ -85,15 +137,13 @@ function ClientLoader.Boot(): ()
 		local initFn = clientModule.OnInit
 
 		if typeof(initFn) == "function" then
-			local initSuccess, initErr = pcall(initFn)
+			local initSuccess = runInitWithTimeout(moduleScript.Name, initFn)
 			if initSuccess then
 				print(`  [OnInit] {moduleScript.Name}`)
 				table.insert(initializedModules, {
 					name = moduleScript.Name,
 					module = clientModule,
 				})
-			else
-				warn(`  [OnInit Error] '{moduleScript.Name}': {tostring(initErr)}`)
 			end
 		else
 			table.insert(initializedModules, {
@@ -110,13 +160,13 @@ function ClientLoader.Boot(): ()
 		if typeof(onStartFn) == "function" then
 			pendingStartCount += 1
 			task.spawn(function()
-				local startSuccess, startErr = pcall(onStartFn)
+				local startSuccess, startErr = xpcall(onStartFn, traceError)
+				pendingStartCount -= 1
 				if startSuccess then
 					print(`  [OnStart] {entry.name}`)
 				else
 					warn(`  [OnStart Error] '{entry.name}': {tostring(startErr)}`)
 				end
-				pendingStartCount -= 1
 			end)
 		end
 	end
@@ -126,7 +176,7 @@ function ClientLoader.Boot(): ()
 		task.wait()
 	end
 
-	-- Fire initial sync only after all client Blink listeners are active
+	-- Fire initial sync even if some modules failed
 	Blink.RequestInitialSync.Fire()
 
 	local totalMs = math.round((os.clock() - startTime) * 1000)

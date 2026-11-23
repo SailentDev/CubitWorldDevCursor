@@ -1,5 +1,4 @@
 --!strict
-local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -11,13 +10,14 @@ local Types = require(ReplicatedStorage.Shared.Types)
 
 local CurrencyService = require(ServerScriptService.services.CurrencyService)
 local DataManager = require(ServerScriptService.services.DataManager)
+local InventoryService = require(ServerScriptService.services.InventoryService)
+local RateLimiter = require(ServerScriptService.Util.RateLimiter)
 
 local EggService = {}
 
 local BUY_COOLDOWN_SECONDS = 0.25
 local HATCH_COOLDOWN_SECONDS = 0.5
-local MAX_EGG_PER_TYPE = 9999
-local MAX_PET_INVENTORY = 500
+local SAVE_THROTTLE_SECONDS = 15
 
 local VALID_HATCH_AMOUNTS: { [number]: boolean } = {
 	[1] = true,
@@ -27,15 +27,20 @@ local VALID_HATCH_AMOUNTS: { [number]: boolean } = {
 }
 
 local rng = Random.new()
-local lastBuyTimes: { [Player]: number } = {}
-local lastHatchTimes: { [Player]: number } = {}
+local buyLimiter = RateLimiter.new(1, 1 / BUY_COOLDOWN_SECONDS)
+local hatchLimiter = RateLimiter.new(1, 1 / HATCH_COOLDOWN_SECONDS)
+local lastSaveTimes: { [Player]: number } = {}
 
-local function countPets(pets: { [string]: Types.PetInstanceData }): number
-	local count = 0
-	for _ in pets do
-		count += 1
+local function tryThrottledSave(player: Player, profile: Types.PlayerProfile): ()
+	local now = os.clock()
+	local lastSave = lastSaveTimes[player]
+	if lastSave and (now - lastSave) < SAVE_THROTTLE_SECONDS then
+		return
 	end
-	return count
+	lastSaveTimes[player] = now
+	if profile:IsActive() then
+		profile:Save()
+	end
 end
 
 local function rollPetFromEgg(eggInfo: Types.EggInfo): string?
@@ -73,11 +78,9 @@ end
 
 function EggService.OnStart(): ()
 	Blink.RequestBuyEgg.On(function(player: Player, data: { eggName: string })
-		local now = os.clock()
-		if (now - (lastBuyTimes[player] or 0)) < BUY_COOLDOWN_SECONDS then
+		if not buyLimiter:Consume(player) then
 			return
 		end
-		lastBuyTimes[player] = now
 
 		if typeof(data) ~= "table" or typeof(data.eggName) ~= "string" then
 			return
@@ -93,8 +96,7 @@ function EggService.OnStart(): ()
 			return
 		end
 
-		local currentEggCount = profile.Data.Eggs[data.eggName] or 0
-		if currentEggCount >= MAX_EGG_PER_TYPE then
+		if not InventoryService:CanAddEggs(player, data.eggName, 1) then
 			return
 		end
 
@@ -102,21 +104,18 @@ function EggService.OnStart(): ()
 			return
 		end
 
-		local newEggAmount = currentEggCount + 1
-		profile.Data.Eggs[data.eggName] = newEggAmount
+		if not InventoryService:AddEggs(player, data.eggName, 1) then
+			CurrencyService:AddCurrency(player, eggInfo.Price, eggInfo.CurrencyType)
+			return
+		end
 
-		Blink.SyncEggs.Fire(player, {
-			eggName = data.eggName,
-			amount = newEggAmount,
-		})
+		tryThrottledSave(player, profile)
 	end)
 
 	Blink.RequestHatch.On(function(player: Player, data: { eggName: string, amount: number })
-		local now = os.clock()
-		if (now - (lastHatchTimes[player] or 0)) < HATCH_COOLDOWN_SECONDS then
+		if not hatchLimiter:Consume(player) then
 			return
 		end
-		lastHatchTimes[player] = now
 
 		if typeof(data) ~= "table" or typeof(data.eggName) ~= "string" or typeof(data.amount) ~= "number" then
 			return
@@ -138,57 +137,48 @@ function EggService.OnStart(): ()
 			return
 		end
 
-		local currentEggs = profile.Data.Eggs[data.eggName] or 0
-		if currentEggs < amount then
+		if InventoryService:GetEggCount(player, data.eggName) < amount then
 			return
 		end
 
-		if countPets(profile.Data.Pets) + amount > MAX_PET_INVENTORY then
+		if not InventoryService:CanAddPets(player, amount) then
 			return
 		end
 
-		-- Pre-verify egg has valid drop candidates before deducting eggs
-		if not rollPetFromEgg(eggInfo) then
-			warn(`[EggService] Egg '{data.eggName}' has no valid drops configured`)
-			return
-		end
-
-		local remainingEggs = currentEggs - amount
-		profile.Data.Eggs[data.eggName] = if remainingEggs > 0 then remainingEggs else nil
-
-		Blink.SyncEggs.Fire(player, {
-			eggName = data.eggName,
-			amount = remainingEggs,
-		})
-
+		local rolledPets: { string } = {}
 		for _ = 1, amount do
 			local rolledPet = rollPetFromEgg(eggInfo)
 			if not rolledPet then
-				continue
+				warn(`[EggService] Egg '{data.eggName}' has no valid drops configured`)
+				return
 			end
+			table.insert(rolledPets, rolledPet)
+		end
 
-			local petUUID = HttpService:GenerateGUID(false)
-			profile.Data.Pets[petUUID] = {
-				petName = rolledPet,
-				level = 1,
-			}
+		if not InventoryService:SpendEggs(player, data.eggName, amount) then
+			return
+		end
 
-			Blink.SyncPets.Fire(player, {
-				isRemoved = false,
-				level = 1,
-				petName = rolledPet,
-				uuid = petUUID,
-			})
+		local hatchedAny = false
+		for _, rolledPet in rolledPets do
+			local petUUID = InventoryService:AddPet(player, rolledPet, 1)
+			if petUUID then
+				hatchedAny = true
+				Blink.EggHatched.Fire(player, {
+					petName = rolledPet,
+				})
+			end
+		end
 
-			Blink.EggHatched.Fire(player, {
-				petName = rolledPet,
-			})
+		if hatchedAny then
+			tryThrottledSave(player, profile)
 		end
 	end)
 
 	Players.PlayerRemoving:Connect(function(player: Player)
-		lastBuyTimes[player] = nil
-		lastHatchTimes[player] = nil
+		buyLimiter:Clear(player)
+		hatchLimiter:Clear(player)
+		lastSaveTimes[player] = nil
 	end)
 end
 

@@ -16,6 +16,9 @@ local SMOOTHNESS_NORMAL = 8
 local SMOOTHNESS_FAST = 15
 local LOD_CULL_DISTANCE = 350
 
+-- Multi-part welded pets must be verified in Studio when using BulkMoveTo vs direct rootPart.CFrame.
+local USE_BULK_MOVE = true
+
 local IDLE_POS_EPSILON_SQ = 0.0025
 local IDLE_LOOK_DOT = 0.9995
 local CONVERGED_DIST_SQ = 0.0025
@@ -51,9 +54,9 @@ local cachedPetsFolder: Folder? = nil
 
 local sharedRayParams = RaycastParams.new()
 sharedRayParams.FilterType = Enum.RaycastFilterType.Exclude
+sharedRayParams.CollisionGroup = "PetProbe"
 sharedRayParams.RespectCanCollide = true
 
-local raycastExcludeList: { Instance } = {}
 local bulkParts: { BasePart } = {}
 local bulkCFrames: { CFrame } = {}
 
@@ -77,21 +80,6 @@ local function getPetsFolder(): Folder?
 	return nil
 end
 
-local function updateRaycastFilter(): ()
-	table.clear(raycastExcludeList)
-	for _, data in playerData do
-		for _, model in data.models do
-			table.insert(raycastExcludeList, model)
-		end
-	end
-	for _, p in Players:GetPlayers() do
-		if p.Character then
-			table.insert(raycastExcludeList, p.Character)
-		end
-	end
-	sharedRayParams.FilterDescendantsInstances = raycastExcludeList
-end
-
 local function clearPlayerModels(data: PlayerPetData): ()
 	for _, model in data.models do
 		model:Destroy()
@@ -109,6 +97,8 @@ local function stopPetUpdater(): ()
 		petUpdater = nil
 	end
 	table.clear(playerActivePets)
+	table.clear(bulkParts)
+	table.clear(bulkCFrames)
 end
 
 local function startPetUpdater(): ()
@@ -130,8 +120,10 @@ local function startPetUpdater(): ()
 		local alphaNormal = 1 - math.exp(-SMOOTHNESS_NORMAL * clampedDt)
 		local alphaFast = 1 - math.exp(-SMOOTHNESS_FAST * clampedDt)
 
-		table.clear(bulkParts)
-		table.clear(bulkCFrames)
+		if USE_BULK_MOVE then
+			table.clear(bulkParts)
+			table.clear(bulkCFrames)
+		end
 
 		for player, pets in playerActivePets do
 			if #pets == 0 then
@@ -241,14 +233,18 @@ local function startPetUpdater(): ()
 					allConverged = false
 				end
 
-				table.insert(bulkParts, rootPart)
-				table.insert(bulkCFrames, nextCFrame)
+				if USE_BULK_MOVE then
+					table.insert(bulkParts, rootPart)
+					table.insert(bulkCFrames, nextCFrame)
+				else
+					rootPart.CFrame = nextCFrame
+				end
 			end
 
 			data.converged = allConverged
 		end
 
-		if #bulkParts > 0 then
+		if USE_BULK_MOVE and #bulkParts > 0 then
 			Workspace:BulkMoveTo(bulkParts, bulkCFrames, Enum.BulkMoveMode.FireCFrameChanged)
 		end
 	end)
@@ -271,17 +267,30 @@ local function refreshPetsAsync(player: Player, character: Model?): ()
 		if next(playerActivePets) == nil then
 			stopPetUpdater()
 		end
-		updateRaycastFilter()
 		return
 	end
 
 	local hrp = character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart", 5)
-	if myGen ~= data.refreshGen or not hrp or not hrp:IsA("BasePart") or not character.Parent then
+	if myGen ~= data.refreshGen then
+		return
+	end
+	if not character.Parent then
+		clearPlayerModels(data)
+		return
+	end
+	if not hrp or not hrp:IsA("BasePart") then
 		return
 	end
 
 	local petFolder = getPetsFolder()
-	if not petFolder or myGen ~= data.refreshGen then
+	if myGen ~= data.refreshGen then
+		return
+	end
+	if not character.Parent then
+		clearPlayerModels(data)
+		return
+	end
+	if not petFolder then
 		return
 	end
 
@@ -290,11 +299,11 @@ local function refreshPetsAsync(player: Player, character: Model?): ()
 
 	for i, petInfo in equippedPets do
 		local template = petFolder:FindFirstChild(petInfo.petName) or petFolder:WaitForChild(petInfo.petName, 5)
-		if myGen ~= data.refreshGen or not character.Parent then
-			for _, m in data.models do
-				m:Destroy()
-			end
-			table.clear(data.models)
+		if myGen ~= data.refreshGen then
+			return
+		end
+		if not character.Parent then
+			clearPlayerModels(data)
 			return
 		end
 
@@ -356,8 +365,6 @@ local function refreshPetsAsync(player: Player, character: Model?): ()
 	elseif next(playerActivePets) == nil then
 		stopPetUpdater()
 	end
-
-	updateRaycastFilter()
 end
 
 function PetClient.IsPetEquipped(uuid: string): boolean
@@ -407,7 +414,6 @@ local function setupPlayerTracking(player: Player): PlayerPetData
 		if next(playerActivePets) == nil then
 			stopPetUpdater()
 		end
-		updateRaycastFilter()
 	end))
 
 	playerData[player] = data
@@ -430,31 +436,11 @@ local function onSyncEquippedPets(payload: { userId: number, equippedPets: { Equ
 	task.spawn(refreshPetsAsync, player, player.Character)
 end
 
-local function onOtherPlayerAdded(player: Player): ()
-	player.CharacterAdded:Connect(function()
-		if playerData[player] then
-			return
-		end
-		updateRaycastFilter()
-	end)
-	player.CharacterRemoving:Connect(function()
-		if playerData[player] then
-			return
-		end
-		task.defer(updateRaycastFilter)
-	end)
-end
-
 function PetClient.OnInit(): ()
 end
 
 function PetClient.OnStart(): ()
 	Blink.SyncEquippedPets.On(onSyncEquippedPets)
-
-	for _, player in Players:GetPlayers() do
-		onOtherPlayerAdded(player)
-	end
-	Players.PlayerAdded:Connect(onOtherPlayerAdded)
 
 	Players.PlayerRemoving:Connect(function(player: Player)
 		local data = playerData[player]
@@ -471,7 +457,6 @@ function PetClient.OnStart(): ()
 		if next(playerActivePets) == nil then
 			stopPetUpdater()
 		end
-		task.defer(updateRaycastFilter)
 	end)
 end
 

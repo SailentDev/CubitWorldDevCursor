@@ -5,14 +5,10 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
 local DataManager = require(ServerScriptService.services.DataManager)
+local RateLimiter = require(ServerScriptService.Util.RateLimiter)
 local Types = require(ReplicatedStorage.Shared.Types)
 
 local SettingsServer = {}
-
-type RateBucket = {
-	tokens: number,
-	lastRefill: number,
-}
 
 local MIN_FOV = 30
 local MAX_FOV = 120
@@ -24,35 +20,10 @@ local MAX_BUCKET_TOKENS = 12
 local REFILL_TOKENS_PER_SEC = 8
 
 local playerDebounceThreads: { [Player]: thread } = {}
-local playerRateBuckets: { [Player]: RateBucket } = {}
+local rateLimiter = RateLimiter.new(MAX_BUCKET_TOKENS, REFILL_TOKENS_PER_SEC)
 
 local function isFiniteNumber(value: unknown): boolean
 	return typeof(value) == "number" and value == value and math.abs(value) < math.huge
-end
-
-local function consumeRateToken(player: Player): boolean
-	local now = os.clock()
-	local bucket = playerRateBuckets[player]
-
-	if not bucket then
-		bucket = {
-			tokens = MAX_BUCKET_TOKENS - 1,
-			lastRefill = now,
-		}
-		playerRateBuckets[player] = bucket
-		return true
-	end
-
-	local elapsed = now - bucket.lastRefill
-	bucket.tokens = math.min(MAX_BUCKET_TOKENS, bucket.tokens + (elapsed * REFILL_TOKENS_PER_SEC))
-	bucket.lastRefill = now
-
-	if bucket.tokens < 1 then
-		return false
-	end
-
-	bucket.tokens -= 1
-	return true
 end
 
 local function buildSyncPayload(settings: Types.Settings): {
@@ -136,11 +107,7 @@ function SettingsServer.OnStart(): ()
 			return
 		end
 
-		if not consumeRateToken(player) then
-			local profile = DataManager:GetProfile(player)
-			if profile then
-				Blink.SyncSettings.Fire(player, buildSyncPayload(profile.Data.Settings))
-			end
+		if not rateLimiter:Consume(player) then
 			return
 		end
 
@@ -153,7 +120,7 @@ function SettingsServer.OnStart(): ()
 			task.cancel(pendingThread)
 			playerDebounceThreads[player] = nil
 		end
-		playerRateBuckets[player] = nil
+		rateLimiter:Clear(player)
 	end)
 end
 

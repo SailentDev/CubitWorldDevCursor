@@ -42,6 +42,15 @@ local shadowsButton: TextButton? = nil
 local statisticsButton: TextButton? = nil
 local statisticsLabel: TextLabel? = nil
 
+local function waitForChildPath(parent: Instance, childName: string, timeout: number, parentPath: string): Instance?
+	local found = parent:WaitForChild(childName, timeout)
+	if not found then
+		warn(`[SettingsClient] Missing instance at path: {parentPath}.{childName}`)
+		return nil
+	end
+	return found
+end
+
 local function getSettingInternal(key: Types.SettingKey): number | boolean
 	if key == "FOV" then
 		return cachedSettings.FOV
@@ -144,7 +153,7 @@ function SettingsClient.UpdateSetting(settingName: Types.SettingKey, value: numb
 		FOV = if settingName == "FOV" then cachedSettings.FOV else nil,
 		MusicVol = if settingName == "MusicVol" then cachedSettings.MusicVol else nil,
 		ShowFPS = if settingName == "ShowFPS" then cachedSettings.ShowFPS else nil,
-		GlobalShadows = cachedSettings.GlobalShadows,
+		GlobalShadows = if settingName == "GlobalShadows" then cachedSettings.GlobalShadows else nil,
 	})
 end
 
@@ -285,34 +294,71 @@ function SettingsClient.OnInit(): ()
 	end)
 
 	local localPlayer = Players.LocalPlayer :: Player
-	local playerGui = localPlayer:WaitForChild("PlayerGui") :: PlayerGui
-	local settingsGui = playerGui:WaitForChild("SettingsGui", 15)
+	local playerGui = waitForChildPath(localPlayer, "PlayerGui", 5, "LocalPlayer")
+	if not playerGui or not playerGui:IsA("PlayerGui") then
+		return
+	end
+
+	local settingsGui = waitForChildPath(playerGui, "SettingsGui", 5, "PlayerGui")
 	if not settingsGui or not settingsGui:IsA("ScreenGui") then
-		warn("[SettingsClient] SettingsGui missing")
+		if settingsGui then
+			warn("[SettingsClient] PlayerGui.SettingsGui is not a ScreenGui")
+		end
 		return
 	end
 
-	local settingsFrame = settingsGui:WaitForChild("Settings", 10)
+	local settingsFrame = waitForChildPath(settingsGui, "Settings", 3, "PlayerGui.SettingsGui")
 	if not settingsFrame or not settingsFrame:IsA("Frame") then
-		warn("[SettingsClient] Settings Frame missing")
+		if settingsFrame then
+			warn("[SettingsClient] PlayerGui.SettingsGui.Settings is not a Frame")
+		end
 		return
 	end
 
-	local fovSliderFrame = settingsFrame:WaitForChild("FovSliderFrame") :: Frame
-	local fovCanvasGroup = fovSliderFrame:WaitForChild("CanvasGroup") :: CanvasGroup
-	local fovFillInst = fovCanvasGroup:WaitForChild("Fill") :: Frame
-	local fovControllerInst = fovCanvasGroup:WaitForChild("SliderController") :: Frame
+	local settingsPath = "PlayerGui.SettingsGui.Settings"
 
-	local musicSliderFrame = settingsFrame:WaitForChild("MusicSliderFrame") :: Frame
-	local musicCanvasGroup = musicSliderFrame:WaitForChild("CanvasGroup") :: CanvasGroup
-	local musicFillInst = musicCanvasGroup:WaitForChild("Fill") :: Frame
-	local musicControllerInst = musicCanvasGroup:WaitForChild("SliderController") :: Frame
+	local fovSliderFrame = waitForChildPath(settingsFrame, "FovSliderFrame", 3, settingsPath)
+	if not fovSliderFrame or not fovSliderFrame:IsA("Frame") then
+		return
+	end
+	local fovCanvasGroup = waitForChildPath(fovSliderFrame, "CanvasGroup", 3, settingsPath .. ".FovSliderFrame")
+	if not fovCanvasGroup or not fovCanvasGroup:IsA("CanvasGroup") then
+		return
+	end
+	local fovFillInst = waitForChildPath(fovCanvasGroup, "Fill", 3, settingsPath .. ".FovSliderFrame.CanvasGroup")
+	local fovControllerInst = waitForChildPath(fovCanvasGroup, "SliderController", 3, settingsPath .. ".FovSliderFrame.CanvasGroup")
+	if not fovFillInst or not fovFillInst:IsA("Frame") or not fovControllerInst or not fovControllerInst:IsA("Frame") then
+		return
+	end
 
-	local shadowsButtonInst = settingsFrame:WaitForChild("ShadowsButton") :: TextButton
-	local statisticsButtonInst = settingsFrame:WaitForChild("StatisticsButton") :: TextButton
-	local statisticsLabelInst = settingsGui:WaitForChild("StatisticsLabel") :: TextLabel
-	local fovValueLabelInst = settingsFrame:WaitForChild("FovValue") :: TextLabel
-	local musicValueLabelInst = settingsFrame:WaitForChild("MusicValue") :: TextLabel
+	local musicSliderFrame = waitForChildPath(settingsFrame, "MusicSliderFrame", 3, settingsPath)
+	if not musicSliderFrame or not musicSliderFrame:IsA("Frame") then
+		return
+	end
+	local musicCanvasGroup = waitForChildPath(musicSliderFrame, "CanvasGroup", 3, settingsPath .. ".MusicSliderFrame")
+	if not musicCanvasGroup or not musicCanvasGroup:IsA("CanvasGroup") then
+		return
+	end
+	local musicFillInst = waitForChildPath(musicCanvasGroup, "Fill", 3, settingsPath .. ".MusicSliderFrame.CanvasGroup")
+	local musicControllerInst = waitForChildPath(musicCanvasGroup, "SliderController", 3, settingsPath .. ".MusicSliderFrame.CanvasGroup")
+	if not musicFillInst or not musicFillInst:IsA("Frame") or not musicControllerInst or not musicControllerInst:IsA("Frame") then
+		return
+	end
+
+	local shadowsButtonInst = waitForChildPath(settingsFrame, "ShadowsButton", 3, settingsPath)
+	local statisticsButtonInst = waitForChildPath(settingsFrame, "StatisticsButton", 3, settingsPath)
+	local statisticsLabelInst = waitForChildPath(settingsGui, "StatisticsLabel", 3, "PlayerGui.SettingsGui")
+	local fovValueLabelInst = waitForChildPath(settingsFrame, "FovValue", 3, settingsPath)
+	local musicValueLabelInst = waitForChildPath(settingsFrame, "MusicValue", 3, settingsPath)
+
+	if not shadowsButtonInst or not shadowsButtonInst:IsA("TextButton")
+		or not statisticsButtonInst or not statisticsButtonInst:IsA("TextButton")
+		or not statisticsLabelInst or not statisticsLabelInst:IsA("TextLabel")
+		or not fovValueLabelInst or not fovValueLabelInst:IsA("TextLabel")
+		or not musicValueLabelInst or not musicValueLabelInst:IsA("TextLabel")
+	then
+		return
+	end
 
 	fovFill = fovFillInst
 	fovController = fovControllerInst

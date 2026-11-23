@@ -2,6 +2,7 @@
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
@@ -18,6 +19,9 @@ type ProfileEventCallback = (player: Player, profile: Types.PlayerProfile) -> ()
 local CURRENT_DATA_VERSION = 1
 local STARTING_COINS = 0 -- Set to 500+ locally if testing shop purchases without a coin source
 local PROFILE_STORE_NAME = "Production_PlayerProfiles_v98989823"
+local ACTIVE_STORE_NAME = if RunService:IsStudio()
+	then PROFILE_STORE_NAME .. "_Studio"
+	else PROFILE_STORE_NAME
 
 local DEFAULT_DATA: Types.ProfileData = {
 	DataVersion = CURRENT_DATA_VERSION,
@@ -34,12 +38,13 @@ local DEFAULT_DATA: Types.ProfileData = {
 }
 
 local activeProfiles: { [Player]: Types.PlayerProfile } = {}
+local readyPlayers: { [Player]: boolean } = {}
 local syncedPlayers: { [Player]: boolean } = {}
 local pendingInitialSync: { [Player]: boolean } = {}
 local profileLoadedCallbacks: { ProfileEventCallback } = {}
 local initialSyncCallbacks: { ProfileEventCallback } = {}
 
-local profileStore = ProfileStore.New(PROFILE_STORE_NAME, DEFAULT_DATA)
+local profileStore = ProfileStore.New(ACTIVE_STORE_NAME, DEFAULT_DATA)
 
 local function migrateProfileData(rawData: { [string]: unknown }): ()
 	local dataVersion = if typeof(rawData.DataVersion) == "number" then rawData.DataVersion else 0
@@ -93,6 +98,13 @@ local function migrateProfileData(rawData: { [string]: unknown }): ()
 	end
 end
 
+local function runInitialSyncCallback(callback: ProfileEventCallback, player: Player, profile: Types.PlayerProfile): ()
+	local success, err = pcall(callback, player, profile)
+	if not success then
+		warn(`[DataManager] OnInitialSync callback error for {player.Name}: {tostring(err)}`)
+	end
+end
+
 function DataManager.OnProfileLoaded(callback: ProfileEventCallback): ()
 	table.insert(profileLoadedCallbacks, callback)
 end
@@ -111,6 +123,13 @@ end
 
 function DataManager:SyncPlayerData(player: Player): ()
 	if syncedPlayers[player] then
+		return
+	end
+
+	if not readyPlayers[player] then
+		if player:IsDescendantOf(Players) then
+			pendingInitialSync[player] = true
+		end
 		return
 	end
 
@@ -156,7 +175,7 @@ function DataManager:SyncPlayerData(player: Player): ()
 	end
 
 	for _, callback in initialSyncCallbacks do
-		task.spawn(callback, player, profile)
+		task.spawn(runInitialSyncCallback, callback, player, profile)
 	end
 end
 
@@ -178,13 +197,14 @@ local function onPlayerAdded(player: Player): ()
 
 	local profile = (rawProfile :: unknown) :: Types.PlayerProfile
 	profile:AddUserId(player.UserId)
-	profile:Reconcile()
 	migrateProfileData((profile.Data :: unknown) :: { [string]: unknown })
+	profile:Reconcile()
 
 	activeProfiles[player] = profile
 
 	profile.OnSessionEnd:Connect(function()
 		activeProfiles[player] = nil
+		readyPlayers[player] = nil
 		syncedPlayers[player] = nil
 		pendingInitialSync[player] = nil
 
@@ -194,8 +214,17 @@ local function onPlayerAdded(player: Player): ()
 	end)
 
 	for _, callback in profileLoadedCallbacks do
-		callback(player, profile)
+		local success, err = pcall(callback, player, profile)
+		if not success then
+			warn(`[DataManager] OnProfileLoaded callback error for {player.Name}: {tostring(err)}`)
+		end
 	end
+
+	if not player:IsDescendantOf(Players) or activeProfiles[player] ~= profile or not profile:IsActive() then
+		return
+	end
+
+	readyPlayers[player] = true
 
 	if pendingInitialSync[player] then
 		DataManager:SyncPlayerData(player)
@@ -203,6 +232,7 @@ local function onPlayerAdded(player: Player): ()
 end
 
 local function onPlayerRemoving(player: Player): ()
+	readyPlayers[player] = nil
 	syncedPlayers[player] = nil
 	pendingInitialSync[player] = nil
 
@@ -225,7 +255,7 @@ function DataManager.OnStart(): ()
 			return
 		end
 
-		if activeProfiles[player] then
+		if readyPlayers[player] then
 			DataManager:SyncPlayerData(player)
 		elseif player:IsDescendantOf(Players) then
 			pendingInitialSync[player] = true

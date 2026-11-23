@@ -1,9 +1,11 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Blink = require(ReplicatedStorage.Shared.Blink.network_client)
 local PetDatabase = require(ReplicatedStorage.Shared.PetDatabase)
+local PetStats = require(ReplicatedStorage.Shared.PetStats)
 local Types = require(ReplicatedStorage.Shared.Types)
 
 local EggShopView = require(script.Parent:WaitForChild("EggShopView"))
@@ -11,7 +13,19 @@ local PetClient = require(script.Parent.Parent:WaitForChild("PetClient"))
 
 local InventoryClient = {}
 
+type QueueItem = {
+	kind: "Egg" | "Pet",
+	key: string,
+}
+
+type PendingPetData = {
+	uuid: string,
+	petName: string,
+	level: number,
+}
+
 local EQUIP_DEBOUNCE = 0.2
+local SLOTS_PER_FRAME = 15
 
 local inventoryScrollingFrame: ScrollingFrame? = nil
 local detailsFrame: Frame? = nil
@@ -29,12 +43,33 @@ local open2x: TextButton? = nil
 local open5x: TextButton? = nil
 local open10x: TextButton? = nil
 
-local eggTemplate: Instance? = nil
-local petTemplate: Instance? = nil
+local eggTemplate: Frame? = nil
+local petTemplate: Frame? = nil
+local defaultPetIconImage = ""
 
 local currentSelectedEgg: string? = nil
 local eggAmounts: { [string]: number } = {}
 local lastEquipClick = 0
+
+local eggSlots: { [string]: Frame } = {}
+local petSlots: { [string]: Frame } = {}
+local eggSlotPool: { Frame } = {}
+local petSlotPool: { Frame } = {}
+
+local pendingEggData: { [string]: number } = {}
+local pendingPetData: { [string]: PendingPetData } = {}
+local creationQueue: { QueueItem } = {}
+local queueHead = 1
+local queueConnection: RBXScriptConnection? = nil
+
+local function waitForChildPath(parent: Instance, childName: string, timeout: number, parentPath: string): Instance?
+	local found = parent:WaitForChild(childName, timeout)
+	if not found then
+		warn(`[InventoryClient] Missing instance at path: {parentPath}.{childName}`)
+		return nil
+	end
+	return found
+end
 
 local function clearPetDetails(): ()
 	if detailsFrame then
@@ -67,9 +102,8 @@ local function updatePetDetails(petId: string, level: number, uuid: string): ()
 		return
 	end
 
-	local levelMultiplier = 1 + (level - 1) * 0.1
-	local currentDamage = math.round(petInfo.BaseDamage * levelMultiplier)
-	local currentHp = math.round(petInfo.BaseHp * levelMultiplier)
+	local currentDamage = PetStats.GetDamage(petInfo, level)
+	local currentHp = PetStats.GetHp(petInfo, level)
 
 	if petNameLabel then
 		petNameLabel.Text = string.format("%s (Lvl %d)", petInfo.Name, level)
@@ -146,50 +180,332 @@ local function sendHatchRequest(amount: number): ()
 	end
 end
 
-function InventoryClient.OnInit(): ()
-	local localPlayer = Players.LocalPlayer :: Player
-	local playerGui = localPlayer:WaitForChild("PlayerGui") :: PlayerGui
+local function configureEggSlot(slot: Frame, eggName: string, amount: number): ()
+	slot.Name = eggName
+	slot:SetAttribute("EggName", eggName)
 
-	local inventoryGui = playerGui:WaitForChild("InventoryGui", 10)
-	local inventoryFrame = if inventoryGui then inventoryGui:WaitForChild("InventoryFrame", 5) else nil
-	if not inventoryFrame then
-		warn("[InventoryClient] InventoryFrame missing")
+	local priceBuyButton = slot:FindFirstChild("PriceBuyButton")
+	if priceBuyButton and priceBuyButton:IsA("GuiObject") then
+		priceBuyButton.Visible = false
+	end
+
+	local amountLabel = slot:FindFirstChild("AmmoutLabel") or slot:FindFirstChild("AmountLabel")
+	if amountLabel and amountLabel:IsA("TextLabel") then
+		amountLabel.Text = tostring(amount) .. "x"
+	end
+end
+
+local function createOrReuseEggSlot(container: ScrollingFrame, eggName: string, amount: number): ()
+	local slot: Frame
+	local pooledCount = #eggSlotPool
+	if pooledCount > 0 then
+		slot = eggSlotPool[pooledCount]
+		eggSlotPool[pooledCount] = nil
+	else
+		local template = eggTemplate
+		if not template then
+			return
+		end
+		slot = template:Clone()
+		local eggIcon = slot:FindFirstChild("EggIcon")
+		if eggIcon and eggIcon:IsA("GuiButton") then
+			eggIcon.Activated:Connect(function()
+				local rawEggName = slot:GetAttribute("EggName")
+				if typeof(rawEggName) == "string" and #rawEggName > 0 then
+					openHatchPrompt(rawEggName)
+				end
+			end)
+		end
+	end
+
+	configureEggSlot(slot, eggName, amount)
+	slot.Visible = true
+	slot.Parent = container
+	eggSlots[eggName] = slot
+end
+
+local function releaseEggSlot(eggName: string): ()
+	local slot = eggSlots[eggName]
+	if not slot then
+		return
+	end
+	eggSlots[eggName] = nil
+	slot:SetAttribute("EggName", nil)
+	slot.Visible = false
+	slot.Parent = nil
+	table.insert(eggSlotPool, slot)
+end
+
+local function configurePetSlot(slot: Frame, data: PendingPetData): ()
+	slot.Name = data.uuid
+	slot:SetAttribute("UUID", data.uuid)
+	slot:SetAttribute("PetId", data.petName)
+	slot:SetAttribute("Level", data.level)
+
+	local amountLabel = slot:FindFirstChild("AmmoutLabel") or slot:FindFirstChild("AmountLabel")
+	if amountLabel and amountLabel:IsA("GuiObject") then
+		amountLabel.Visible = false
+	end
+
+	local petIcon = slot:FindFirstChild("PetIcon")
+	if petIcon and petIcon:IsA("ImageButton") then
+		local petInfo = PetDatabase.GetPetInfo(data.petName)
+		if petInfo and petInfo.IconId ~= "" then
+			petIcon.Image = petInfo.IconId
+		else
+			petIcon.Image = defaultPetIconImage
+		end
+	end
+end
+
+local function createOrReusePetSlot(container: ScrollingFrame, data: PendingPetData): ()
+	local slot: Frame
+	local pooledCount = #petSlotPool
+	if pooledCount > 0 then
+		slot = petSlotPool[pooledCount]
+		petSlotPool[pooledCount] = nil
+	else
+		local template = petTemplate
+		if not template then
+			return
+		end
+		slot = template:Clone()
+		local petIcon = slot:FindFirstChild("PetIcon")
+		if petIcon and petIcon:IsA("ImageButton") then
+			petIcon.Activated:Connect(function()
+				local rawUUID = slot:GetAttribute("UUID")
+				local rawLevel = slot:GetAttribute("Level")
+				local rawPetId = slot:GetAttribute("PetId")
+				if typeof(rawUUID) ~= "string" or typeof(rawPetId) ~= "string" then
+					return
+				end
+				local currentLevel = if typeof(rawLevel) == "number" then rawLevel else 1
+
+				if detailsFrame then
+					detailsFrame:SetAttribute("SelectedPetUUID", rawUUID)
+				end
+				updatePetDetails(rawPetId, currentLevel, rawUUID)
+			end)
+		end
+	end
+
+	configurePetSlot(slot, data)
+	slot.Visible = true
+	slot.Parent = container
+	petSlots[data.uuid] = slot
+end
+
+local function releasePetSlot(uuid: string): ()
+	local slot = petSlots[uuid]
+	if not slot then
+		return
+	end
+	petSlots[uuid] = nil
+	slot:SetAttribute("UUID", nil)
+	slot:SetAttribute("PetId", nil)
+	slot:SetAttribute("Level", nil)
+	slot.Visible = false
+	slot.Parent = nil
+	table.insert(petSlotPool, slot)
+end
+
+local function processCreationQueue(): ()
+	local container = inventoryScrollingFrame
+	if not container then
+		table.clear(creationQueue)
+		queueHead = 1
+		if queueConnection then
+			queueConnection:Disconnect()
+			queueConnection = nil
+		end
 		return
 	end
 
-	inventoryScrollingFrame = inventoryFrame:WaitForChild("ScrollingFrame") :: ScrollingFrame
+	local createdThisFrame = 0
+	while createdThisFrame < SLOTS_PER_FRAME and queueHead <= #creationQueue do
+		local item = creationQueue[queueHead]
+		queueHead += 1
 
-	local details = inventoryFrame:WaitForChild("DetailsFrame") :: Frame
-	detailsFrame = details
-	petNameLabel = details:WaitForChild("PetNameLabel") :: TextLabel
-	rarityLabel = details:WaitForChild("RarityLabel") :: TextLabel
-	elementLabel = details:WaitForChild("ElementLabel") :: TextLabel
-	damageLabel = details:WaitForChild("DamageLabel") :: TextLabel
-	healthLabel = details:WaitForChild("HealthLabel") :: TextLabel
-
-	local equipBtn = details:WaitForChild("EquipToggleButton") :: TextButton
-	equipToggleButton = equipBtn
-	equipBtn.Visible = false
-
-	local prompt = inventoryFrame:WaitForChild("HatchPromptFrame") :: Frame
-	hatchPromptFrame = prompt
-	closeButton = prompt:WaitForChild("CloseButton") :: TextButton
-	open1x = prompt:WaitForChild("Open1x") :: TextButton
-	open2x = prompt:WaitForChild("Open2x") :: TextButton
-	open5x = prompt:WaitForChild("Open5x") :: TextButton
-	open10x = prompt:WaitForChild("Open10x") :: TextButton
-
-	local sharedFolder = ReplicatedStorage:WaitForChild("Shared") :: Folder
-	local templates = sharedFolder:WaitForChild("Templates") :: Folder
-	eggTemplate = templates:WaitForChild("EggTemplate")
-	petTemplate = templates:WaitForChild("PetTemplate")
-
-	local shopGui = playerGui:WaitForChild("EggShopGui", 10)
-	local shopFrame = if shopGui then shopGui:WaitForChild("EggShopFrame", 5) else nil
-	local shopScrolling = if shopFrame then shopFrame:WaitForChild("ScrollingFrame", 5) else nil
-	if shopScrolling and shopScrolling:IsA("ScrollingFrame") then
-		EggShopView.Populate(shopScrolling)
+		if item.kind == "Egg" then
+			local amount = pendingEggData[item.key]
+			if amount and amount > 0 then
+				pendingEggData[item.key] = nil
+				if not eggSlots[item.key] then
+					createOrReuseEggSlot(container, item.key, amount)
+					createdThisFrame += 1
+				end
+			end
+		elseif item.kind == "Pet" then
+			local petData = pendingPetData[item.key]
+			if petData then
+				pendingPetData[item.key] = nil
+				if not petSlots[item.key] then
+					createOrReusePetSlot(container, petData)
+					createdThisFrame += 1
+				end
+			end
+		end
 	end
+
+	if queueHead > #creationQueue then
+		table.clear(creationQueue)
+		queueHead = 1
+		if queueConnection then
+			queueConnection:Disconnect()
+			queueConnection = nil
+		end
+	end
+end
+
+local function ensureQueueRunning(): ()
+	if not queueConnection then
+		queueConnection = RunService.Heartbeat:Connect(processCreationQueue)
+	end
+end
+
+function InventoryClient.OnInit(): ()
+	local localPlayer = Players.LocalPlayer :: Player
+	local playerGuiInst = waitForChildPath(localPlayer, "PlayerGui", 5, "LocalPlayer")
+	if not playerGuiInst or not playerGuiInst:IsA("PlayerGui") then
+		return
+	end
+
+	local inventoryGui = waitForChildPath(playerGuiInst, "InventoryGui", 5, "PlayerGui")
+	if not inventoryGui then
+		return
+	end
+
+	local inventoryFrame = waitForChildPath(inventoryGui, "InventoryFrame", 3, "PlayerGui.InventoryGui")
+	if not inventoryFrame or not inventoryFrame:IsA("Frame") then
+		if inventoryFrame then
+			warn("[InventoryClient] PlayerGui.InventoryGui.InventoryFrame is not a Frame")
+		end
+		return
+	end
+
+	local scrollingInst = waitForChildPath(inventoryFrame, "ScrollingFrame", 3, "PlayerGui.InventoryGui.InventoryFrame")
+	if not scrollingInst or not scrollingInst:IsA("ScrollingFrame") then
+		if scrollingInst then
+			warn("[InventoryClient] PlayerGui.InventoryGui.InventoryFrame.ScrollingFrame is not a ScrollingFrame")
+		end
+		return
+	end
+
+	local detailsInst = waitForChildPath(inventoryFrame, "DetailsFrame", 3, "PlayerGui.InventoryGui.InventoryFrame")
+	if not detailsInst or not detailsInst:IsA("Frame") then
+		if detailsInst then
+			warn("[InventoryClient] PlayerGui.InventoryGui.InventoryFrame.DetailsFrame is not a Frame")
+		end
+		return
+	end
+
+	local detailsPath = "PlayerGui.InventoryGui.InventoryFrame.DetailsFrame"
+	local petNameInst = waitForChildPath(detailsInst, "PetNameLabel", 3, detailsPath)
+	local rarityInst = waitForChildPath(detailsInst, "RarityLabel", 3, detailsPath)
+	local elementInst = waitForChildPath(detailsInst, "ElementLabel", 3, detailsPath)
+	local damageInst = waitForChildPath(detailsInst, "DamageLabel", 3, detailsPath)
+	local healthInst = waitForChildPath(detailsInst, "HealthLabel", 3, detailsPath)
+	local equipBtnInst = waitForChildPath(detailsInst, "EquipToggleButton", 3, detailsPath)
+
+	if not petNameInst or not petNameInst:IsA("TextLabel")
+		or not rarityInst or not rarityInst:IsA("TextLabel")
+		or not elementInst or not elementInst:IsA("TextLabel")
+		or not damageInst or not damageInst:IsA("TextLabel")
+		or not healthInst or not healthInst:IsA("TextLabel")
+		or not equipBtnInst or not equipBtnInst:IsA("TextButton")
+	then
+		return
+	end
+
+	local promptInst = waitForChildPath(inventoryFrame, "HatchPromptFrame", 3, "PlayerGui.InventoryGui.InventoryFrame")
+	if not promptInst or not promptInst:IsA("Frame") then
+		if promptInst then
+			warn("[InventoryClient] PlayerGui.InventoryGui.InventoryFrame.HatchPromptFrame is not a Frame")
+		end
+		return
+	end
+
+	local promptPath = "PlayerGui.InventoryGui.InventoryFrame.HatchPromptFrame"
+	local closeInst = waitForChildPath(promptInst, "CloseButton", 3, promptPath)
+	local open1Inst = waitForChildPath(promptInst, "Open1x", 3, promptPath)
+	local open2Inst = waitForChildPath(promptInst, "Open2x", 3, promptPath)
+	local open5Inst = waitForChildPath(promptInst, "Open5x", 3, promptPath)
+	local open10Inst = waitForChildPath(promptInst, "Open10x", 3, promptPath)
+
+	if not closeInst or not closeInst:IsA("TextButton")
+		or not open1Inst or not open1Inst:IsA("TextButton")
+		or not open2Inst or not open2Inst:IsA("TextButton")
+		or not open5Inst or not open5Inst:IsA("TextButton")
+		or not open10Inst or not open10Inst:IsA("TextButton")
+	then
+		return
+	end
+
+	local sharedFolder = waitForChildPath(ReplicatedStorage, "Shared", 5, "ReplicatedStorage")
+	if not sharedFolder then
+		return
+	end
+	local templates = waitForChildPath(sharedFolder, "Templates", 3, "ReplicatedStorage.Shared")
+	if not templates then
+		return
+	end
+	local eggTemplateInst = waitForChildPath(templates, "EggTemplate", 3, "ReplicatedStorage.Shared.Templates")
+	local petTemplateInst = waitForChildPath(templates, "PetTemplate", 3, "ReplicatedStorage.Shared.Templates")
+	if not eggTemplateInst or not eggTemplateInst:IsA("Frame") then
+		if eggTemplateInst then
+			warn("[InventoryClient] ReplicatedStorage.Shared.Templates.EggTemplate is not a Frame")
+		end
+		return
+	end
+	if not petTemplateInst or not petTemplateInst:IsA("Frame") then
+		if petTemplateInst then
+			warn("[InventoryClient] ReplicatedStorage.Shared.Templates.PetTemplate is not a Frame")
+		end
+		return
+	end
+
+	inventoryScrollingFrame = scrollingInst
+	detailsFrame = detailsInst
+	petNameLabel = petNameInst
+	rarityLabel = rarityInst
+	elementLabel = elementInst
+	damageLabel = damageInst
+	healthLabel = healthInst
+	equipToggleButton = equipBtnInst
+	equipBtnInst.Visible = false
+
+	hatchPromptFrame = promptInst
+	closeButton = closeInst
+	open1x = open1Inst
+	open2x = open2Inst
+	open5x = open5Inst
+	open10x = open10Inst
+
+	eggTemplate = eggTemplateInst
+	petTemplate = petTemplateInst
+
+	local defaultIcon = petTemplateInst:FindFirstChild("PetIcon")
+	if defaultIcon and defaultIcon:IsA("ImageButton") then
+		defaultPetIconImage = defaultIcon.Image
+	end
+
+	local shopGui = waitForChildPath(playerGuiInst, "EggShopGui", 5, "PlayerGui")
+	if not shopGui then
+		return
+	end
+	local shopFrame = waitForChildPath(shopGui, "EggShopFrame", 3, "PlayerGui.EggShopGui")
+	if not shopFrame then
+		return
+	end
+	local shopScrolling = waitForChildPath(shopFrame, "ScrollingFrame", 3, "PlayerGui.EggShopGui.EggShopFrame")
+	if not shopScrolling or not shopScrolling:IsA("ScrollingFrame") then
+		if shopScrolling then
+			warn("[InventoryClient] PlayerGui.EggShopGui.EggShopFrame.ScrollingFrame is not a ScrollingFrame")
+		end
+		return
+	end
+
+	EggShopView.Populate(shopScrolling)
 end
 
 function InventoryClient.OnStart(): ()
@@ -246,12 +562,10 @@ function InventoryClient.OnStart(): ()
 			return
 		end
 
-		local existingSlot = container:FindFirstChild(data.eggName)
 		if data.amount <= 0 then
 			eggAmounts[data.eggName] = nil
-			if existingSlot then
-				existingSlot:Destroy()
-			end
+			pendingEggData[data.eggName] = nil
+			releaseEggSlot(data.eggName)
 			if currentSelectedEgg == data.eggName then
 				refreshHatchPromptButtons()
 			end
@@ -259,33 +573,19 @@ function InventoryClient.OnStart(): ()
 		end
 
 		eggAmounts[data.eggName] = data.amount
+		local existingSlot = eggSlots[data.eggName]
 		if existingSlot then
-			local amountLabel = existingSlot:FindFirstChild("AmmoutLabel") or existingSlot:FindFirstChild("AmountLabel")
-			if amountLabel and amountLabel:IsA("TextLabel") then
-				amountLabel.Text = tostring(data.amount) .. "x"
+			configureEggSlot(existingSlot, data.eggName, data.amount)
+		else
+			local wasQueued = pendingEggData[data.eggName] ~= nil
+			pendingEggData[data.eggName] = data.amount
+			if not wasQueued then
+				table.insert(creationQueue, {
+					kind = "Egg",
+					key = data.eggName,
+				})
+				ensureQueueRunning()
 			end
-		elseif eggTemplate then
-			local newSlot = eggTemplate:Clone()
-			newSlot.Name = data.eggName
-
-			local priceBuyButton = newSlot:FindFirstChild("PriceBuyButton")
-			if priceBuyButton and priceBuyButton:IsA("GuiObject") then
-				priceBuyButton.Visible = false
-			end
-
-			local amountLabel = newSlot:FindFirstChild("AmmoutLabel") or newSlot:FindFirstChild("AmountLabel")
-			if amountLabel and amountLabel:IsA("TextLabel") then
-				amountLabel.Text = tostring(data.amount) .. "x"
-			end
-
-			local eggIcon = newSlot:FindFirstChild("EggIcon")
-			if eggIcon and eggIcon:IsA("GuiButton") then
-				eggIcon.Activated:Connect(function()
-					openHatchPrompt(data.eggName)
-				end)
-			end
-
-			newSlot.Parent = container
 		end
 
 		if currentSelectedEgg == data.eggName and hatchPromptFrame and hatchPromptFrame.Visible then
@@ -300,62 +600,42 @@ function InventoryClient.OnStart(): ()
 		end
 
 		local selectedUUID = if detailsFrame then detailsFrame:GetAttribute("SelectedPetUUID") else nil
-		local existingSlot = container:FindFirstChild(data.uuid)
 
 		if data.isRemoved then
-			if existingSlot then
-				existingSlot:Destroy()
-			end
+			pendingPetData[data.uuid] = nil
+			releasePetSlot(data.uuid)
 			if selectedUUID == data.uuid then
 				clearPetDetails()
 			end
 			return
 		end
 
+		local existingSlot = petSlots[data.uuid]
 		if existingSlot then
-			existingSlot:SetAttribute("Level", data.level)
-			existingSlot:SetAttribute("PetId", data.petName)
+			configurePetSlot(existingSlot, {
+				uuid = data.uuid,
+				petName = data.petName,
+				level = data.level,
+			})
 			if selectedUUID == data.uuid then
 				updatePetDetails(data.petName, data.level, data.uuid)
 			end
 			return
 		end
 
-		if not petTemplate then
-			return
+		local wasQueued = pendingPetData[data.uuid] ~= nil
+		pendingPetData[data.uuid] = {
+			uuid = data.uuid,
+			petName = data.petName,
+			level = data.level,
+		}
+		if not wasQueued then
+			table.insert(creationQueue, {
+				kind = "Pet",
+				key = data.uuid,
+			})
+			ensureQueueRunning()
 		end
-
-		local newSlot = petTemplate:Clone()
-		newSlot.Name = data.uuid
-		newSlot:SetAttribute("PetId", data.petName)
-		newSlot:SetAttribute("Level", data.level)
-
-		local amountLabel = newSlot:FindFirstChild("AmmoutLabel") or newSlot:FindFirstChild("AmountLabel")
-		if amountLabel and amountLabel:IsA("GuiObject") then
-			amountLabel.Visible = false
-		end
-
-		local petIcon = newSlot:FindFirstChild("PetIcon")
-		if petIcon and petIcon:IsA("ImageButton") then
-			local petInfo = PetDatabase.GetPetInfo(data.petName)
-			if petInfo and petInfo.IconId ~= "" then
-				petIcon.Image = petInfo.IconId
-			end
-
-			petIcon.Activated:Connect(function()
-				local rawLevel = newSlot:GetAttribute("Level")
-				local rawPetId = newSlot:GetAttribute("PetId")
-				local currentLevel = if typeof(rawLevel) == "number" then rawLevel else data.level
-				local currentName = if typeof(rawPetId) == "string" then rawPetId else data.petName
-
-				if detailsFrame then
-					detailsFrame:SetAttribute("SelectedPetUUID", data.uuid)
-				end
-				updatePetDetails(currentName, currentLevel, data.uuid)
-			end)
-		end
-
-		newSlot.Parent = container
 	end)
 end
 

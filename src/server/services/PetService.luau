@@ -9,6 +9,8 @@ local PetDatabase = require(ReplicatedStorage.Shared.PetDatabase)
 local Types = require(ReplicatedStorage.Shared.Types)
 
 local DataManager = require(ServerScriptService.services.DataManager)
+local InventoryService = require(ServerScriptService.services.InventoryService)
+local RateLimiter = require(ServerScriptService.Util.RateLimiter)
 
 local MAX_EQUIPPED_PETS = 1
 local EQUIP_COOLDOWN_SECONDS = 0.2
@@ -16,7 +18,7 @@ local EQUIP_COOLDOWN_SECONDS = 0.2
 local PetService = {}
 
 local currentEquippedCache: { [number]: { Types.EquippedPetInfo } } = {}
-local lastEquipTimes: { [Player]: number } = {}
+local equipLimiter = RateLimiter.new(1, 1 / EQUIP_COOLDOWN_SECONDS)
 
 local function getOrCreateReplicatedPetsFolder(): Folder
 	local sharedFolder = ReplicatedStorage:WaitForChild("Shared") :: Folder
@@ -92,6 +94,42 @@ local function buildEquippedPetsData(profile: Types.PlayerProfile): { Types.Equi
 	return result
 end
 
+local function equippedListsEqual(a: { Types.EquippedPetInfo }?, b: { Types.EquippedPetInfo }): boolean
+	if not a or #a ~= #b then
+		return false
+	end
+	for i, itemA in a do
+		local itemB = b[i]
+		if not itemB or itemA.uuid ~= itemB.uuid or itemA.petName ~= itemB.petName then
+			return false
+		end
+	end
+	return true
+end
+
+local function onInventoryPetsChanged(player: Player, action: InventoryService.PetChangeAction, _uuid: string, _petData: Types.PetInstanceData): ()
+	if action ~= "Removed" then
+		return
+	end
+
+	local profile = DataManager:GetProfile(player)
+	if not profile then
+		return
+	end
+
+	local previousCache = currentEquippedCache[player.UserId]
+	pruneEquippedList(profile)
+	local sendData = buildEquippedPetsData(profile)
+	currentEquippedCache[player.UserId] = sendData
+
+	if not equippedListsEqual(previousCache, sendData) then
+		Blink.SyncEquippedPets.FireAll({
+			userId = player.UserId,
+			equippedPets = sendData,
+		})
+	end
+end
+
 local function onProfileLoaded(player: Player, profile: Types.PlayerProfile): ()
 	pruneEquippedList(profile)
 	local sendData = buildEquippedPetsData(profile)
@@ -121,16 +159,14 @@ function PetService.OnInit(): ()
 	getOrCreateReplicatedPetsFolder()
 	DataManager.OnProfileLoaded(onProfileLoaded)
 	DataManager.OnInitialSync(onPlayerInitialSync)
+	InventoryService.OnPetsChanged(onInventoryPetsChanged)
 end
 
 function PetService.OnStart(): ()
 	Blink.RequestEquip.On(function(player: Player, data: { uuid: string })
-		local now = os.clock()
-		local lastTime = lastEquipTimes[player] or 0
-		if (now - lastTime) < EQUIP_COOLDOWN_SECONDS then
+		if not equipLimiter:Consume(player) then
 			return
 		end
-		lastEquipTimes[player] = now
 
 		if typeof(data) ~= "table" or typeof(data.uuid) ~= "string" or #data.uuid == 0 or #data.uuid > 64 then
 			return
@@ -172,7 +208,7 @@ function PetService.OnStart(): ()
 	end)
 
 	Players.PlayerRemoving:Connect(function(player: Player)
-		lastEquipTimes[player] = nil
+		equipLimiter:Clear(player)
 		currentEquippedCache[player.UserId] = nil
 
 		Blink.SyncEquippedPets.FireExcept(player, {

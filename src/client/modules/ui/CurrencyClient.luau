@@ -44,13 +44,27 @@ end
 
 function CurrencyClient.OnStart(): ()
 	local localPlayer = Players.LocalPlayer :: Player
-	local playerGui = localPlayer:WaitForChild("PlayerGui") :: PlayerGui
-	local mainHUD = playerGui:WaitForChild("MainHUD", 10)
-	local currencyFrame = if mainHUD then mainHUD:WaitForChild("CurrencyFrame", 5) else nil
-	local coinsLabel = if currencyFrame then currencyFrame:WaitForChild("CoinsLabel", 5) else nil
+	local playerGui = localPlayer:WaitForChild("PlayerGui", 5)
+	if not playerGui then
+		warn("[CurrencyClient] Missing instance at path: LocalPlayer.PlayerGui")
+		return
+	end
 
+	local mainHUD = playerGui:WaitForChild("MainHUD", 5)
+	if not mainHUD then
+		warn("[CurrencyClient] Missing instance at path: PlayerGui.MainHUD")
+		return
+	end
+
+	local currencyFrame = mainHUD:WaitForChild("CurrencyFrame", 3)
+	if not currencyFrame then
+		warn("[CurrencyClient] Missing instance at path: PlayerGui.MainHUD.CurrencyFrame")
+		return
+	end
+
+	local coinsLabel = currencyFrame:WaitForChild("CoinsLabel", 3)
 	if not coinsLabel or not coinsLabel:IsA("TextLabel") then
-		warn("[CurrencyClient] CoinsLabel missing")
+		warn("[CurrencyClient] Missing or invalid instance at path: PlayerGui.MainHUD.CurrencyFrame.CoinsLabel")
 		return
 	end
 

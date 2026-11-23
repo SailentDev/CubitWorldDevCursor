@@ -14,9 +14,23 @@ type EggEntry = {
 }
 
 function EggShopView.Populate(scrollingFrame: ScrollingFrame): ()
-	local sharedFolder = ReplicatedStorage:WaitForChild("Shared") :: Folder
-	local templates = sharedFolder:WaitForChild("Templates") :: Folder
-	local eggTemplate = templates:WaitForChild("EggTemplate")
+	local sharedFolder = ReplicatedStorage:WaitForChild("Shared", 5)
+	if not sharedFolder then
+		warn("[EggShopView] Missing instance at path: ReplicatedStorage.Shared")
+		return
+	end
+
+	local templates = sharedFolder:WaitForChild("Templates", 3)
+	if not templates then
+		warn("[EggShopView] Missing instance at path: ReplicatedStorage.Shared.Templates")
+		return
+	end
+
+	local eggTemplate = templates:WaitForChild("EggTemplate", 3)
+	if not eggTemplate then
+		warn("[EggShopView] Missing instance at path: ReplicatedStorage.Shared.Templates.EggTemplate")
+		return
+	end
 
 	for _, child in scrollingFrame:GetChildren() do
 		if child:IsA("GuiObject") then

@@ -34,6 +34,15 @@ local TWEEN_INFO_CLICK = TweenInfo.new(0.05, Enum.EasingStyle.Sine, Enum.EasingD
 local activeTrackers: { [Frame]: TweenTracker } = {}
 local registeredPanels: { [Frame]: PanelInfo } = {}
 
+local function waitForChildPath(parent: Instance, childName: string, timeout: number, parentPath: string): Instance?
+	local found = parent:WaitForChild(childName, timeout)
+	if not found then
+		warn(`[UIManager] Missing instance at path: {parentPath}.{childName}`)
+		return nil
+	end
+	return found
+end
+
 local function transitionFrame(frame: Frame, targetPosition: UDim2, show: boolean): ()
 	local existingTracker = activeTrackers[frame]
 	if existingTracker then
@@ -176,33 +185,39 @@ end
 
 function UIManager.OnInit(): ()
 	local localPlayer = Players.LocalPlayer :: Player
-	local playerGui = localPlayer:WaitForChild("PlayerGui") :: PlayerGui
-
-	local mainHUD = playerGui:WaitForChild("MainHUD", 10)
-	local buttonsFrame = if mainHUD then mainHUD:WaitForChild("Buttons", 5) else nil
-	if not buttonsFrame then
-		warn("[UIManager] MainHUD.Buttons missing")
+	local playerGui = waitForChildPath(localPlayer, "PlayerGui", 5, "LocalPlayer")
+	if not playerGui then
 		return
 	end
 
-	local settingsButton = buttonsFrame:WaitForChild("SettingsButton", 5)
-	local inventoryButton = buttonsFrame:WaitForChild("InventoryButton", 5)
-	local eggShopButton = buttonsFrame:WaitForChild("EggShopButton", 5)
+	local mainHUD = waitForChildPath(playerGui, "MainHUD", 4, "PlayerGui")
+	if not mainHUD then
+		return
+	end
 
-	local settingsGui = playerGui:WaitForChild("SettingsGui", 10)
-	local settingsFrame = if settingsGui then settingsGui:WaitForChild("Settings", 5) else nil
-
-	local inventoryGui = playerGui:WaitForChild("InventoryGui", 10)
-	local inventoryFrame = if inventoryGui then inventoryGui:WaitForChild("InventoryFrame", 5) else nil
-
-	local eggShopGui = playerGui:WaitForChild("EggShopGui", 10)
-	local eggShopFrame = if eggShopGui then eggShopGui:WaitForChild("EggShopFrame", 5) else nil
+	local buttonsFrame = waitForChildPath(mainHUD, "Buttons", 2, "PlayerGui.MainHUD")
+	if not buttonsFrame then
+		return
+	end
 
 	for _, child in buttonsFrame:GetChildren() do
 		if child:IsA("GuiButton") then
 			applyButtonFeedback(child)
 		end
 	end
+
+	local settingsButton = waitForChildPath(buttonsFrame, "SettingsButton", 2, "PlayerGui.MainHUD.Buttons")
+	local inventoryButton = waitForChildPath(buttonsFrame, "InventoryButton", 2, "PlayerGui.MainHUD.Buttons")
+	local eggShopButton = waitForChildPath(buttonsFrame, "EggShopButton", 2, "PlayerGui.MainHUD.Buttons")
+
+	local settingsGui = waitForChildPath(playerGui, "SettingsGui", 2, "PlayerGui")
+	local settingsFrame = if settingsGui then waitForChildPath(settingsGui, "Settings", 2, "PlayerGui.SettingsGui") else nil
+
+	local inventoryGui = waitForChildPath(playerGui, "InventoryGui", 2, "PlayerGui")
+	local inventoryFrame = if inventoryGui then waitForChildPath(inventoryGui, "InventoryFrame", 2, "PlayerGui.InventoryGui") else nil
+
+	local eggShopGui = waitForChildPath(playerGui, "EggShopGui", 2, "PlayerGui")
+	local eggShopFrame = if eggShopGui then waitForChildPath(eggShopGui, "EggShopFrame", 2, "PlayerGui.EggShopGui") else nil
 
 	if settingsButton and settingsButton:IsA("GuiButton") and settingsFrame and settingsFrame:IsA("Frame") then
 		registerPanel(settingsButton, settingsFrame)
