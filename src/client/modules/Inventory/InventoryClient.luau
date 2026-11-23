@@ -8,7 +8,6 @@ local PetDatabase = require(ReplicatedStorage.Shared.PetDatabase)
 local PetStats = require(ReplicatedStorage.Shared.PetStats)
 local Types = require(ReplicatedStorage.Shared.Types)
 
-local EggShopView = require(script.Parent:WaitForChild("EggShopView"))
 local PetClient = require(script.Parent.Parent:WaitForChild("PetClient"))
 
 local InventoryClient = {}
@@ -488,24 +487,6 @@ function InventoryClient.OnInit(): ()
 	if defaultIcon and defaultIcon:IsA("ImageButton") then
 		defaultPetIconImage = defaultIcon.Image
 	end
-
-	local shopGui = waitForChildPath(playerGuiInst, "EggShopGui", 5, "PlayerGui")
-	if not shopGui then
-		return
-	end
-	local shopFrame = waitForChildPath(shopGui, "EggShopFrame", 3, "PlayerGui.EggShopGui")
-	if not shopFrame then
-		return
-	end
-	local shopScrolling = waitForChildPath(shopFrame, "ScrollingFrame", 3, "PlayerGui.EggShopGui.EggShopFrame")
-	if not shopScrolling or not shopScrolling:IsA("ScrollingFrame") then
-		if shopScrolling then
-			warn("[InventoryClient] PlayerGui.EggShopGui.EggShopFrame.ScrollingFrame is not a ScrollingFrame")
-		end
-		return
-	end
-
-	EggShopView.Populate(shopScrolling)
 end
 
 function InventoryClient.OnStart(): ()

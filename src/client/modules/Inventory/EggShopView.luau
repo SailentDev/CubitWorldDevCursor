@@ -1,4 +1,5 @@
 --!strict
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local EggDatabase = require(ReplicatedStorage.Shared.EggDatabase)
@@ -13,22 +14,31 @@ type EggEntry = {
 	info: Types.EggInfo,
 }
 
+local function waitForChildPath(parent: Instance, childName: string, timeout: number, parentPath: string): Instance?
+	local found = parent:WaitForChild(childName, timeout)
+	if not found then
+		warn(`[EggShopView] Missing instance at path: {parentPath}.{childName}`)
+		return nil
+	end
+	return found
+end
+
 function EggShopView.Populate(scrollingFrame: ScrollingFrame): ()
-	local sharedFolder = ReplicatedStorage:WaitForChild("Shared", 5)
+	local sharedFolder = waitForChildPath(ReplicatedStorage, "Shared", 5, "ReplicatedStorage")
 	if not sharedFolder then
-		warn("[EggShopView] Missing instance at path: ReplicatedStorage.Shared")
 		return
 	end
 
-	local templates = sharedFolder:WaitForChild("Templates", 3)
+	local templates = waitForChildPath(sharedFolder, "Templates", 3, "ReplicatedStorage.Shared")
 	if not templates then
-		warn("[EggShopView] Missing instance at path: ReplicatedStorage.Shared.Templates")
 		return
 	end
 
-	local eggTemplate = templates:WaitForChild("EggTemplate", 3)
-	if not eggTemplate then
-		warn("[EggShopView] Missing instance at path: ReplicatedStorage.Shared.Templates.EggTemplate")
+	local eggTemplate = waitForChildPath(templates, "EggTemplate", 3, "ReplicatedStorage.Shared.Templates")
+	if not eggTemplate or not eggTemplate:IsA("GuiObject") then
+		if eggTemplate then
+			warn("[EggShopView] ReplicatedStorage.Shared.Templates.EggTemplate is not a GuiObject")
+		end
 		return
 	end
 
@@ -56,8 +66,12 @@ function EggShopView.Populate(scrollingFrame: ScrollingFrame): ()
 
 		local clone = eggTemplate:Clone()
 		clone.Name = eggName
-		if clone:IsA("GuiObject") then
-			clone.LayoutOrder = info.LayoutOrder
+		clone.LayoutOrder = info.LayoutOrder
+		clone.Visible = true
+
+		local amountLabel = clone:FindFirstChild("AmmoutLabel") or clone:FindFirstChild("AmountLabel")
+		if amountLabel and amountLabel:IsA("GuiObject") then
+			amountLabel.Visible = false
 		end
 
 		local buyButton = clone:FindFirstChild("PriceBuyButton")
@@ -70,6 +84,34 @@ function EggShopView.Populate(scrollingFrame: ScrollingFrame): ()
 
 		clone.Parent = scrollingFrame
 	end
+end
+
+function EggShopView.OnInit(): ()
+	local localPlayer = Players.LocalPlayer :: Player
+	local playerGui = waitForChildPath(localPlayer, "PlayerGui", 5, "LocalPlayer")
+	if not playerGui then
+		return
+	end
+
+	local shopGui = waitForChildPath(playerGui, "EggShopGui", 5, "PlayerGui")
+	if not shopGui then
+		return
+	end
+
+	local shopFrame = waitForChildPath(shopGui, "EggShopFrame", 3, "PlayerGui.EggShopGui")
+	if not shopFrame then
+		return
+	end
+
+	local shopScrolling = waitForChildPath(shopFrame, "ScrollingFrame", 3, "PlayerGui.EggShopGui.EggShopFrame")
+	if not shopScrolling or not shopScrolling:IsA("ScrollingFrame") then
+		if shopScrolling then
+			warn("[EggShopView] PlayerGui.EggShopGui.EggShopFrame.ScrollingFrame is not a ScrollingFrame")
+		end
+		return
+	end
+
+	EggShopView.Populate(shopScrolling)
 end
 
 return EggShopView
