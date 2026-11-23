@@ -3,7 +3,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
+local Blink = require(ServerScriptService.Net.network_server)
 local DataManager = require(ServerScriptService.services.DataManager)
 local RateLimiter = require(ServerScriptService.Util.RateLimiter)
 local Types = require(ReplicatedStorage.Shared.Types)

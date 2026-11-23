@@ -4,7 +4,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local ServerStorage = game:GetService("ServerStorage")
 
-local Blink = require(ReplicatedStorage.Shared.Blink.network_server)
+local Blink = require(ServerScriptService.Net.network_server)
 local PetDatabase = require(ReplicatedStorage.Shared.PetDatabase)
 local Types = require(ReplicatedStorage.Shared.Types)
 
