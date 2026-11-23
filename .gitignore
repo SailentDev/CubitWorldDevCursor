@@ -1,8 +1,27 @@
-# Project place file
-/CubitCombatDevCursor.rbxlx
+# Roblox Studio place & backup files
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.rbxl.lock
+*.rbxlx.lock
 
-# Roblox Studio lock files
-/*.rbxlx.lock
-/*.rbxl.lock
-
+# Rojo generated files
 sourcemap.json
+
+# Binaries & Executables (np. blinkblox.exe w src/shared/Blink/)
+*.exe
+
+# Blink generated network files (generowane z network.blink)
+src/shared/Blink/network_client.luau
+src/shared/Blink/network_server.luau
+
+# Package managers (na przyszłość, gdybyś dodał Wally lub Pesde)
+Packages/
+ServerPackages/
+DevPackages/
+roblox_packages/
+
+# OS & Editor temporary files
+.DS_Store
+Thumbs.db
