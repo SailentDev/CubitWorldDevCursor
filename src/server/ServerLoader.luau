@@ -26,6 +26,7 @@ local SERVICE_PRIORITY: { [string]: number } = {
 	PetService = 6,
 	EggService = 7,
 	ServerOptimization = 8,
+	AdminService = 9,
 }
 
 local function traceError(err: unknown): string

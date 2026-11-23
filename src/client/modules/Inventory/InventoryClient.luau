@@ -27,33 +27,33 @@ local EQUIP_DEBOUNCE = 0.2
 local SLOTS_PER_FRAME = 15
 
 local inventoryScrollingFrame: ScrollingFrame? = nil
-local detailsFrame: Frame? = nil
+local detailsFrame: GuiObject? = nil
 local petNameLabel: TextLabel? = nil
 local rarityLabel: TextLabel? = nil
 local elementLabel: TextLabel? = nil
 local damageLabel: TextLabel? = nil
 local healthLabel: TextLabel? = nil
-local equipToggleButton: TextButton? = nil
+local equipToggleButton: GuiButton? = nil
 
-local hatchPromptFrame: Frame? = nil
-local closeButton: TextButton? = nil
-local open1x: TextButton? = nil
-local open2x: TextButton? = nil
-local open5x: TextButton? = nil
-local open10x: TextButton? = nil
+local hatchPromptFrame: GuiObject? = nil
+local closeButton: GuiButton? = nil
+local open1x: GuiButton? = nil
+local open2x: GuiButton? = nil
+local open5x: GuiButton? = nil
+local open10x: GuiButton? = nil
 
-local eggTemplate: Frame? = nil
-local petTemplate: Frame? = nil
+local eggTemplate: GuiObject? = nil
+local petTemplate: GuiObject? = nil
 local defaultPetIconImage = ""
 
 local currentSelectedEgg: string? = nil
 local eggAmounts: { [string]: number } = {}
 local lastEquipClick = 0
 
-local eggSlots: { [string]: Frame } = {}
-local petSlots: { [string]: Frame } = {}
-local eggSlotPool: { Frame } = {}
-local petSlotPool: { Frame } = {}
+local eggSlots: { [string]: GuiObject } = {}
+local petSlots: { [string]: GuiObject } = {}
+local eggSlotPool: { GuiObject } = {}
+local petSlotPool: { GuiObject } = {}
 
 local pendingEggData: { [string]: number } = {}
 local pendingPetData: { [string]: PendingPetData } = {}
@@ -65,6 +65,30 @@ local function waitForChildPath(parent: Instance, childName: string, timeout: nu
 	local found = parent:WaitForChild(childName, timeout)
 	if not found then
 		warn(`[InventoryClient] Missing instance at path: {parentPath}.{childName}`)
+		return nil
+	end
+	return found
+end
+
+local function waitForTextLabel(parent: Instance, childName: string, timeout: number, parentPath: string): TextLabel?
+	local found = waitForChildPath(parent, childName, timeout, parentPath)
+	if not found then
+		return nil
+	end
+	if not found:IsA("TextLabel") then
+		warn(`[InventoryClient] Expected TextLabel at {parentPath}.{childName}, got {found.ClassName}`)
+		return nil
+	end
+	return found
+end
+
+local function waitForGuiButton(parent: Instance, childName: string, timeout: number, parentPath: string): GuiButton?
+	local found = waitForChildPath(parent, childName, timeout, parentPath)
+	if not found then
+		return nil
+	end
+	if not found:IsA("GuiButton") then
+		warn(`[InventoryClient] Expected GuiButton at {parentPath}.{childName}, got {found.ClassName}`)
 		return nil
 	end
 	return found
@@ -91,6 +115,15 @@ local function clearPetDetails(): ()
 	end
 	if equipToggleButton then
 		equipToggleButton.Visible = false
+	end
+end
+
+local function updateEquipButtonVisual(isEquipped: boolean): ()
+	if not equipToggleButton then
+		return
+	end
+	if equipToggleButton:IsA("TextButton") then
+		equipToggleButton.Text = if isEquipped then "Unequip" else "Equip"
 	end
 end
 
@@ -121,7 +154,7 @@ local function updatePetDetails(petId: string, level: number, uuid: string): ()
 	end
 
 	if equipToggleButton then
-		equipToggleButton.Text = if PetClient.IsPetEquipped(uuid) then "Unequip" else "Equip"
+		updateEquipButtonVisual(PetClient.IsPetEquipped(uuid))
 		equipToggleButton.Visible = true
 	end
 end
@@ -179,7 +212,7 @@ local function sendHatchRequest(amount: number): ()
 	end
 end
 
-local function configureEggSlot(slot: Frame, eggName: string, amount: number): ()
+local function configureEggSlot(slot: GuiObject, eggName: string, amount: number): ()
 	slot.Name = eggName
 	slot:SetAttribute("EggName", eggName)
 
@@ -191,11 +224,12 @@ local function configureEggSlot(slot: Frame, eggName: string, amount: number): (
 	local amountLabel = slot:FindFirstChild("AmmoutLabel") or slot:FindFirstChild("AmountLabel")
 	if amountLabel and amountLabel:IsA("TextLabel") then
 		amountLabel.Text = tostring(amount) .. "x"
+		amountLabel.Visible = true
 	end
 end
 
 local function createOrReuseEggSlot(container: ScrollingFrame, eggName: string, amount: number): ()
-	local slot: Frame
+	local slot: GuiObject
 	local pooledCount = #eggSlotPool
 	if pooledCount > 0 then
 		slot = eggSlotPool[pooledCount]
@@ -235,7 +269,7 @@ local function releaseEggSlot(eggName: string): ()
 	table.insert(eggSlotPool, slot)
 end
 
-local function configurePetSlot(slot: Frame, data: PendingPetData): ()
+local function configurePetSlot(slot: GuiObject, data: PendingPetData): ()
 	slot.Name = data.uuid
 	slot:SetAttribute("UUID", data.uuid)
 	slot:SetAttribute("PetId", data.petName)
@@ -258,7 +292,7 @@ local function configurePetSlot(slot: Frame, data: PendingPetData): ()
 end
 
 local function createOrReusePetSlot(container: ScrollingFrame, data: PendingPetData): ()
-	local slot: Frame
+	local slot: GuiObject
 	local pooledCount = #petSlotPool
 	if pooledCount > 0 then
 		slot = petSlotPool[pooledCount]
@@ -374,69 +408,19 @@ function InventoryClient.OnInit(): ()
 		return
 	end
 
-	local inventoryFrame = waitForChildPath(inventoryGui, "InventoryFrame", 3, "PlayerGui.InventoryGui")
-	if not inventoryFrame or not inventoryFrame:IsA("Frame") then
+	local inventoryFrame = waitForChildPath(inventoryGui, "InventoryFrame", 2, "PlayerGui.InventoryGui")
+	if not inventoryFrame or not inventoryFrame:IsA("GuiObject") then
 		if inventoryFrame then
-			warn("[InventoryClient] PlayerGui.InventoryGui.InventoryFrame is not a Frame")
+			warn(`[InventoryClient] Expected GuiObject at PlayerGui.InventoryGui.InventoryFrame, got {inventoryFrame.ClassName}`)
 		end
 		return
 	end
 
-	local scrollingInst = waitForChildPath(inventoryFrame, "ScrollingFrame", 3, "PlayerGui.InventoryGui.InventoryFrame")
+	local scrollingInst = waitForChildPath(inventoryFrame, "ScrollingFrame", 2, "PlayerGui.InventoryGui.InventoryFrame")
 	if not scrollingInst or not scrollingInst:IsA("ScrollingFrame") then
 		if scrollingInst then
-			warn("[InventoryClient] PlayerGui.InventoryGui.InventoryFrame.ScrollingFrame is not a ScrollingFrame")
+			warn(`[InventoryClient] Expected ScrollingFrame at PlayerGui.InventoryGui.InventoryFrame.ScrollingFrame, got {scrollingInst.ClassName}`)
 		end
-		return
-	end
-
-	local detailsInst = waitForChildPath(inventoryFrame, "DetailsFrame", 3, "PlayerGui.InventoryGui.InventoryFrame")
-	if not detailsInst or not detailsInst:IsA("Frame") then
-		if detailsInst then
-			warn("[InventoryClient] PlayerGui.InventoryGui.InventoryFrame.DetailsFrame is not a Frame")
-		end
-		return
-	end
-
-	local detailsPath = "PlayerGui.InventoryGui.InventoryFrame.DetailsFrame"
-	local petNameInst = waitForChildPath(detailsInst, "PetNameLabel", 3, detailsPath)
-	local rarityInst = waitForChildPath(detailsInst, "RarityLabel", 3, detailsPath)
-	local elementInst = waitForChildPath(detailsInst, "ElementLabel", 3, detailsPath)
-	local damageInst = waitForChildPath(detailsInst, "DamageLabel", 3, detailsPath)
-	local healthInst = waitForChildPath(detailsInst, "HealthLabel", 3, detailsPath)
-	local equipBtnInst = waitForChildPath(detailsInst, "EquipToggleButton", 3, detailsPath)
-
-	if not petNameInst or not petNameInst:IsA("TextLabel")
-		or not rarityInst or not rarityInst:IsA("TextLabel")
-		or not elementInst or not elementInst:IsA("TextLabel")
-		or not damageInst or not damageInst:IsA("TextLabel")
-		or not healthInst or not healthInst:IsA("TextLabel")
-		or not equipBtnInst or not equipBtnInst:IsA("TextButton")
-	then
-		return
-	end
-
-	local promptInst = waitForChildPath(inventoryFrame, "HatchPromptFrame", 3, "PlayerGui.InventoryGui.InventoryFrame")
-	if not promptInst or not promptInst:IsA("Frame") then
-		if promptInst then
-			warn("[InventoryClient] PlayerGui.InventoryGui.InventoryFrame.HatchPromptFrame is not a Frame")
-		end
-		return
-	end
-
-	local promptPath = "PlayerGui.InventoryGui.InventoryFrame.HatchPromptFrame"
-	local closeInst = waitForChildPath(promptInst, "CloseButton", 3, promptPath)
-	local open1Inst = waitForChildPath(promptInst, "Open1x", 3, promptPath)
-	local open2Inst = waitForChildPath(promptInst, "Open2x", 3, promptPath)
-	local open5Inst = waitForChildPath(promptInst, "Open5x", 3, promptPath)
-	local open10Inst = waitForChildPath(promptInst, "Open10x", 3, promptPath)
-
-	if not closeInst or not closeInst:IsA("TextButton")
-		or not open1Inst or not open1Inst:IsA("TextButton")
-		or not open2Inst or not open2Inst:IsA("TextButton")
-		or not open5Inst or not open5Inst:IsA("TextButton")
-		or not open10Inst or not open10Inst:IsA("TextButton")
-	then
 		return
 	end
 
@@ -444,48 +428,61 @@ function InventoryClient.OnInit(): ()
 	if not sharedFolder then
 		return
 	end
-	local templates = waitForChildPath(sharedFolder, "Templates", 3, "ReplicatedStorage.Shared")
+	local templates = waitForChildPath(sharedFolder, "Templates", 2, "ReplicatedStorage.Shared")
 	if not templates then
 		return
 	end
-	local eggTemplateInst = waitForChildPath(templates, "EggTemplate", 3, "ReplicatedStorage.Shared.Templates")
-	local petTemplateInst = waitForChildPath(templates, "PetTemplate", 3, "ReplicatedStorage.Shared.Templates")
-	if not eggTemplateInst or not eggTemplateInst:IsA("Frame") then
+
+	local eggTemplateInst = waitForChildPath(templates, "EggTemplate", 2, "ReplicatedStorage.Shared.Templates")
+	if not eggTemplateInst or not eggTemplateInst:IsA("GuiObject") then
 		if eggTemplateInst then
-			warn("[InventoryClient] ReplicatedStorage.Shared.Templates.EggTemplate is not a Frame")
-		end
-		return
-	end
-	if not petTemplateInst or not petTemplateInst:IsA("Frame") then
-		if petTemplateInst then
-			warn("[InventoryClient] ReplicatedStorage.Shared.Templates.PetTemplate is not a Frame")
+			warn(`[InventoryClient] Expected GuiObject at ReplicatedStorage.Shared.Templates.EggTemplate, got {eggTemplateInst.ClassName}`)
 		end
 		return
 	end
 
 	inventoryScrollingFrame = scrollingInst
-	detailsFrame = detailsInst
-	petNameLabel = petNameInst
-	rarityLabel = rarityInst
-	elementLabel = elementInst
-	damageLabel = damageInst
-	healthLabel = healthInst
-	equipToggleButton = equipBtnInst
-	equipBtnInst.Visible = false
-
-	hatchPromptFrame = promptInst
-	closeButton = closeInst
-	open1x = open1Inst
-	open2x = open2Inst
-	open5x = open5Inst
-	open10x = open10Inst
-
 	eggTemplate = eggTemplateInst
-	petTemplate = petTemplateInst
 
-	local defaultIcon = petTemplateInst:FindFirstChild("PetIcon")
-	if defaultIcon and defaultIcon:IsA("ImageButton") then
-		defaultPetIconImage = defaultIcon.Image
+	local petTemplateInst = waitForChildPath(templates, "PetTemplate", 1, "ReplicatedStorage.Shared.Templates")
+	if petTemplateInst and petTemplateInst:IsA("GuiObject") then
+		petTemplate = petTemplateInst
+		local defaultIcon = petTemplateInst:FindFirstChild("PetIcon")
+		if defaultIcon and defaultIcon:IsA("ImageButton") then
+			defaultPetIconImage = defaultIcon.Image
+		end
+	elseif petTemplateInst then
+		warn(`[InventoryClient] Expected GuiObject at ReplicatedStorage.Shared.Templates.PetTemplate, got {petTemplateInst.ClassName}`)
+	end
+
+	local detailsInst = waitForChildPath(inventoryFrame, "DetailsFrame", 1, "PlayerGui.InventoryGui.InventoryFrame")
+	if detailsInst and detailsInst:IsA("GuiObject") then
+		local detailsPath = "PlayerGui.InventoryGui.InventoryFrame.DetailsFrame"
+		detailsFrame = detailsInst
+		petNameLabel = waitForTextLabel(detailsInst, "PetNameLabel", 0.5, detailsPath)
+		rarityLabel = waitForTextLabel(detailsInst, "RarityLabel", 0.5, detailsPath)
+		elementLabel = waitForTextLabel(detailsInst, "ElementLabel", 0.5, detailsPath)
+		damageLabel = waitForTextLabel(detailsInst, "DamageLabel", 0.5, detailsPath)
+		healthLabel = waitForTextLabel(detailsInst, "HealthLabel", 0.5, detailsPath)
+		equipToggleButton = waitForGuiButton(detailsInst, "EquipToggleButton", 0.5, detailsPath)
+		if equipToggleButton then
+			equipToggleButton.Visible = false
+		end
+	elseif detailsInst then
+		warn(`[InventoryClient] Expected GuiObject at PlayerGui.InventoryGui.InventoryFrame.DetailsFrame, got {detailsInst.ClassName}`)
+	end
+
+	local promptInst = waitForChildPath(inventoryFrame, "HatchPromptFrame", 1, "PlayerGui.InventoryGui.InventoryFrame")
+	if promptInst and promptInst:IsA("GuiObject") then
+		local promptPath = "PlayerGui.InventoryGui.InventoryFrame.HatchPromptFrame"
+		hatchPromptFrame = promptInst
+		closeButton = waitForGuiButton(promptInst, "CloseButton", 0.5, promptPath)
+		open1x = waitForGuiButton(promptInst, "Open1x", 0.5, promptPath)
+		open2x = waitForGuiButton(promptInst, "Open2x", 0.5, promptPath)
+		open5x = waitForGuiButton(promptInst, "Open5x", 0.5, promptPath)
+		open10x = waitForGuiButton(promptInst, "Open10x", 0.5, promptPath)
+	elseif promptInst then
+		warn(`[InventoryClient] Expected GuiObject at PlayerGui.InventoryGui.InventoryFrame.HatchPromptFrame, got {promptInst.ClassName}`)
 	end
 end
 
@@ -523,7 +520,7 @@ function InventoryClient.OnStart(): ()
 
 	PetClient.EquippedChanged:Connect(function(equippedList: { Types.EquippedPetInfo })
 		local selectedUUID = if detailsFrame then detailsFrame:GetAttribute("SelectedPetUUID") else nil
-		if typeof(selectedUUID) ~= "string" or not equipToggleButton then
+		if typeof(selectedUUID) ~= "string" then
 			return
 		end
 
@@ -534,7 +531,7 @@ function InventoryClient.OnStart(): ()
 				break
 			end
 		end
-		equipToggleButton.Text = if isEquipped then "Unequip" else "Equip"
+		updateEquipButtonVisual(isEquipped)
 	end)
 
 	Blink.SyncEggs.On(function(data: { eggName: string, amount: number })

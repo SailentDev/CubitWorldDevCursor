@@ -16,9 +16,9 @@ local DataManager = {}
 
 type ProfileEventCallback = (player: Player, profile: Types.PlayerProfile) -> ()
 
-local CURRENT_DATA_VERSION = 1
+local CURRENT_DATA_VERSION = 84878478
 local STARTING_COINS = 500 -- Set to 500+ locally if testing shop purchases without a coin source
-local PROFILE_STORE_NAME = "Production_PlayerProfiles_v98989823"
+local PROFILE_STORE_NAME = "Production_PlayerProfiles_v84878478"
 local ACTIVE_STORE_NAME = if RunService:IsStudio()
 	then PROFILE_STORE_NAME .. "_Studio"
 	else PROFILE_STORE_NAME

@@ -16,6 +16,8 @@ sourcemap.json
 src/shared/Blink/network_client.luau
 src/shared/Blink/network_server.luau
 
+src/server/services/ProfileStore.luau
+
 # Package managers (na przyszłość, gdybyś dodał Wally lub Pesde)
 Packages/
 ServerPackages/
