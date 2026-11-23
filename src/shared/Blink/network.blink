@@ -1,5 +1,5 @@
 option ClientOutput = "C:\Users\PC\Documents\CubitWorldDevCursor\src\shared\Blink\network_client.luau"
-option ServerOutput = "C:\Users\PC\Documents\CubitWorldDevCursor\src\shared\Blink\network_server.luau"
+option ServerOutput = "C:\Users\PC\Documents\CubitWorldDevCursor\src\server\Net\network_server.luau"
 
 -- ==========================================
 -- STRUKTURY (Structures)
